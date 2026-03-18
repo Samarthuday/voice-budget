@@ -33,10 +33,10 @@ async def run_demo(turns: int, target_ms: int, verbose: bool):
     from voice_budget import wrap
 
     print(f"\n{'='*60}")
-    print(f"  voice-budget live demo")
+    print("  voice-budget live demo")
     print(f"  turns={turns}  target={target_ms}ms  strategy=sliding_window")
     print(f"{'='*60}\n")
-    print(f"  Simulating a voice agent whose TTFT grows with context,")
+    print("  Simulating a voice agent whose TTFT grows with context,")
     print(f"  then voice-budget kicks in and keeps it under {target_ms}ms.\n")
 
     call_n = [0]
