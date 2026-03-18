@@ -407,3 +407,43 @@ class TestRollback:
             # After rollback, next call should have received more messages
             # (the original uncompressed context)
             assert len(received_msgs) >= 2, "Expected multiple LLM calls"
+
+
+class TestStreaming:
+
+    @pytest.mark.asyncio
+    async def test_streaming_ttft_recorded(self):
+        """Streaming LLM (async generator) should still record TTFT samples."""
+        call_count = [0]
+
+        async def streaming_llm(messages, **kwargs):
+            call_count[0] += 1
+            # Simulate a streaming response that yields chunks
+            async def _gen():
+                await asyncio.sleep(0.05)
+                yield "Hello"
+                yield " world"
+            return _gen()
+
+        budget = VoiceBudget(
+            streaming_llm,
+            target_ms=5000,
+            window_size=5,
+            token_budget=50000,
+            use_semantic=False,
+            verbose=False,
+        )
+        msgs = make_messages(n_turns=3)
+
+        for _ in range(4):
+            result = await budget(msgs)
+            # Consume the stream
+            chunks = []
+            async for chunk in result:
+                chunks.append(chunk)
+            assert chunks == ["Hello", " world"]
+
+        stats = budget.stats()
+        assert stats is not None
+        assert stats.turn == 4
+        assert stats.p50_ms > 0

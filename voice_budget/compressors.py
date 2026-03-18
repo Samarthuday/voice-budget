@@ -219,9 +219,16 @@ class SummariseTailCompressor(BaseCompressor):
         system_msgs = messages[:1] if has_system else []
         body = messages[1:] if has_system else messages
 
-        # Protect last 4 turns (2 exchanges)
-        protected_recent = body[-4:] if len(body) > 4 else body
-        to_summarise = body[:-4] if len(body) > 4 else []
+        # Summarise only the oldest `tail_turns` messages, keep the rest.
+        tail_turns = max(0, int(self._tail_turns))
+        if tail_turns == 0 or not body:
+            return list(messages), 0
+        if len(body) <= tail_turns:
+            to_summarise = body
+            protected_recent = []
+        else:
+            to_summarise = body[:tail_turns]
+            protected_recent = body[tail_turns:]
 
         if not to_summarise:
             return list(messages), 0
