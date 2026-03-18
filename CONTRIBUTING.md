@@ -32,6 +32,7 @@ voice-budget demo --turns 20 --target-ms 800 --verbose
 
 Create `voice_budget/{framework}_integration.py` following the pattern in
 `pipecat_integration.py`. The integration should:
+
 - Be framework-specific (import guarded so voice-budget stays lightweight)
 - Intercept messages before they reach the LLM
 - Measure actual TTFT by timing first-token arrival

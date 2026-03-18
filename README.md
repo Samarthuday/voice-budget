@@ -3,11 +3,13 @@
 **The only voice agent context manager with a TTFT feedback loop.**
 
 Every other context compression library does this:
+
 ```python
 compress(messages, ratio=0.7)  # blindly compress. hope it helped.
 ```
 
 `voice-budget` does this:
+
 ```python
 llm = voice_budget.wrap(your_llm, target_ms=800)
 # → measures TTFT per turn
@@ -105,7 +107,8 @@ pipeline = Pipeline([
 
 ## How it works
 
-```
+```text
+
 Turn 1:   TTFT=480ms  tokens=120  ✓ under budget
 Turn 2:   TTFT=510ms  tokens=240  ✓ under budget
 ...
@@ -123,7 +126,7 @@ Turn 15:  TTFT=460ms  tokens=350  ✓ compression helped
 
 ### The feedback loop
 
-```
+```python
 TTFT_P95 = np.percentile(ttft_window, 95)
 
 if TTFT_P95 > target_ms:
@@ -143,7 +146,7 @@ if TTFT_P95 > target_ms:
 ### Compression strategies (escalating cost)
 
 | Strategy | Cost | When used |
-|---|---|---|
+| --- | --- | --- |
 | `sliding_window` | Free | First attempt — drop oldest turns |
 | `semantic_trim` | ~5ms (local embeddings) | If sliding window not enough |
 | `summarise_tail` | 1 LLM call | If semantic trim not enough (opt-in) |
@@ -161,7 +164,7 @@ print(s.p50_ms, s.p95_ms, s.jitter_ms)
 managed_llm.print_report()
 ```
 
-```
+```text
 ============================================================
 voice-budget Report
 ============================================================
@@ -237,7 +240,7 @@ budget = VoiceBudget(
 ## Why not use existing tools?
 
 | Tool | TTFT-aware? | Feedback loop? | Voice-specific? | Auto-tune? |
-|---|---|---|---|---|
+| --- | --- | --- | --- | --- |
 | context-compressor | ✗ | ✗ | ✗ | ✗ |
 | reme-ai | ✗ | ✗ | ✗ | ✗ |
 | Pipecat compaction | ✗ | ✗ | ✓ | ✗ |

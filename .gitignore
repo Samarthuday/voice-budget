@@ -1,0 +1,75 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+pip-wheel-metadata/
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+pytest_cache/
+
+# Virtual environments
+.env
+.venv
+venv/
+ENV/
+env/
+
+# IDE files
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Python packaging artifacts
+*.egg
+
+# mypy / type checking
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Ruff / linters
+.ruff_cache/
+
+# Documentation builds
+docs/_build/
+
+# Temporary files
+*.tmp
+*.log
+
+# Jupyter notebooks checkpoints
+.ipynb_checkpoints/
+
+# Local configuration
+.env.local
+.env.*.local
+
+# Hatch environments
+.hatch/
+
+# Coverage reports
+coverage.xml
+*.cover

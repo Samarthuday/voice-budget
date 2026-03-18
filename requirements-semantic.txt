@@ -1,0 +1,5 @@
+# Optional: enables SemanticTrimCompressor (better compression quality)
+# Install with: pip install -r requirements-semantic.txt
+
+-r requirements.txt
+sentence-transformers>=3.0.0

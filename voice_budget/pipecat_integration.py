@@ -82,7 +82,6 @@ class VoiceBudgetProcessor:
         """
         try:
             from pipecat.frames.frames import (
-                LLMFullResponseEndFrame,
                 LLMMessagesAppendFrame,
                 LLMMessagesUpdateFrame,
                 LLMTextFrame,
@@ -91,8 +90,6 @@ class VoiceBudgetProcessor:
             # Pipecat not installed — pass through
             await self.push_frame(frame, direction)
             return
-
-        from pipecat.processors.frame_processor import FrameDirection
 
         if isinstance(frame, (LLMMessagesAppendFrame, LLMMessagesUpdateFrame)):
             # This is where context is about to be sent to the LLM
@@ -119,10 +116,16 @@ class VoiceBudgetProcessor:
                 if self._verbose:
                     s = self._measurer.stats()
                     if s and self._measurer._turn % 5 == 0:
+                        history = self._measurer.compression_history()
+                        last_ev = history[-1] if history else None
+                        action = ""
+                        if last_ev and last_ev.turn == self._measurer._turn:
+                            action = f" [{last_ev.strategy}]"
                         print(
                             f"[voice-budget/pipecat] "
                             f"Turn {s.turn} P50={s.p50_ms:.0f}ms "
                             f"P95={s.p95_ms:.0f}ms tokens={s.token_count}"
+                            f" compressions={len(history)}{action}"
                         )
 
         await self.push_frame(frame, direction)
@@ -180,6 +183,9 @@ class VoiceBudgetProcessor:
 
     def stats(self):
         return self._measurer.stats()
+
+    def compression_history(self):
+        return self._measurer.compression_history()
 
     def report(self):
         return self._measurer.weekly_report()

@@ -9,9 +9,8 @@ Three compression strategies in escalating cost order:
 The BudgetCompressor tries them in order and measures TTFT after each.
 """
 
-import asyncio
 from abc import ABC, abstractmethod
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 
 # ── Base ──────────────────────────────────────────────────────────────────────
@@ -122,15 +121,14 @@ class SemanticTrimCompressor(BaseCompressor):
             def token_counter(msgs):
                 return sum(len(str(m.get("content", "")).split()) * 4 // 3 for m in msgs)
 
-        model = self._get_model()
-        np = self._np
-
         has_system = messages and messages[0].get("role") == "system"
         system_msgs = messages[:1] if has_system else []
         body = messages[1:] if has_system else messages
 
         if len(body) <= 2:
             return list(messages), 0
+
+        model = self._get_model()
 
         # The current query is the last user message
         current_query = ""
@@ -161,7 +159,11 @@ class SemanticTrimCompressor(BaseCompressor):
                 result.remove(msg)
                 tokens_removed += len(str(msg.get("content", "")).split()) * 4 // 3
 
-        return system_msgs + result + [last_msg] if last_msg not in result else system_msgs + result, tokens_removed
+        if last_msg not in result:
+            final = system_msgs + result + [last_msg]
+        else:
+            final = system_msgs + result
+        return final, tokens_removed
 
 
 # ── Strategy 3: Summarise tail ────────────────────────────────────────────────
@@ -299,4 +301,5 @@ class BudgetCompressor:
                 return compressed, strategy.name, removed
 
         # Fallback: return last attempt even if target not fully met
+        return compressed, strategy.name, removed
         return compressed, self._strategies[-1].name, removed

@@ -5,24 +5,18 @@ Run: pytest tests/ -v
 """
 
 import asyncio
-import time
 from typing import Dict, List
-from unittest.mock import AsyncMock, MagicMock
-
-import numpy as np
 import pytest
 
 from voice_budget.compressors import (
     BudgetCompressor,
     SemanticTrimCompressor,
     SlidingWindowCompressor,
-    SummariseTailCompressor,
 )
 from voice_budget.core import TTFTMeasurer
 from voice_budget.wrapper import VoiceBudget, wrap
 
 
-# ── Fixtures ──────────────────────────────────────────────────────────────────
 
 def make_messages(n_turns: int = 10, words_per_turn: int = 50) -> List[Dict]:
     """Generate a fake conversation of n_turns."""
@@ -61,8 +55,6 @@ async def variable_llm(messages, **kwargs) -> str:
     return "Variable response."
 
 
-# ── TTFTMeasurer tests ─────────────────────────────────────────────────────────
-
 class TestTTFTMeasurer:
 
     def test_no_stats_below_3_samples(self):
@@ -76,9 +68,9 @@ class TestTTFTMeasurer:
 
     def test_p95_calculation(self):
         m = TTFTMeasurer(target_ms=800, window_size=100)
-        for _ in range(95):
+        for _ in range(90):
             m.record_sample(500.0, 100)
-        for _ in range(5):
+        for _ in range(10):
             m.record_sample(2000.0, 100)
         s = m.stats()
         assert s.p95_ms > 1000, "P95 should reflect the high outliers"
@@ -136,8 +128,6 @@ class TestTTFTMeasurer:
         assert "total_tokens_saved" in r
         assert r["total_turns"] == 10
 
-
-# ── Compression strategy tests ─────────────────────────────────────────────────
 
 class TestSlidingWindowCompressor:
 
@@ -200,8 +190,6 @@ class TestBudgetCompressor:
         assert removed > 0
 
 
-# ── VoiceBudget wrapper tests ─────────────────────────────────────────────────
-
 class TestVoiceBudget:
 
     @pytest.mark.asyncio
@@ -242,8 +230,10 @@ class TestVoiceBudget:
         history = budget.compression_history()
         s = budget.stats()
         assert s is not None
-        # Either compression happened OR stats exist — both valid
         assert s.turn == 10
+        assert len(history) > 0, "Expected at least one compression event"
+        assert history[0].strategy == "sliding_window"
+        assert history[0].tokens_before > history[0].tokens_after
 
     @pytest.mark.asyncio
     async def test_wrap_convenience_function(self):

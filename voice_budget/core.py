@@ -7,10 +7,8 @@ detects when context growth is causing latency to climb,
 and triggers the compression feedback loop.
 """
 
-import asyncio
-import time
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Callable, Deque, Dict, List, Optional
 
 import numpy as np

@@ -13,9 +13,8 @@ Usage (Pipecat — see pipecat_integration.py for full example):
     from voice_budget.pipecat import VoiceBudgetProcessor
 """
 
-import asyncio
 import time
-from typing import Any, AsyncIterator, Callable, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, List, Optional
 
 from .compressors import BudgetCompressor
 from .core import TTFTMeasurer
