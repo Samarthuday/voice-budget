@@ -186,7 +186,7 @@ class SummariseTailCompressor(BaseCompressor):
     def __init__(self, llm_fn: Optional[Callable] = None, tail_turns: int = 10, summary_prompt: Optional[str] = None):
         """
         llm_fn: async callable that takes a messages list and returns a string.
-        tail_turns: how many oldest turns to summarise.
+        tail_turns: how many oldest messages to summarise (not conversation turns/pairs).
         summary_prompt: custom prompt for summarisation. Uses DEFAULT_SUMMARY_PROMPT if None.
         """
         self._llm_fn = llm_fn
