@@ -3,7 +3,7 @@
 ## Setup
 
 ```bash
-git clone https://github.com/YOUR_HANDLE/voice-budget
+git clone https://github.com/Samarthre/voice-budget
 cd voice-budget
 pip install -e ".[dev,semantic]"
 ```

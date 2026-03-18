@@ -43,10 +43,10 @@ dev = [
 voice-budget = "voice_budget.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/YOUR_HANDLE/voice-budget"
-Repository = "https://github.com/YOUR_HANDLE/voice-budget"
-Documentation = "https://github.com/YOUR_HANDLE/voice-budget#readme"
-Issues = "https://github.com/YOUR_HANDLE/voice-budget/issues"
+Homepage = "https://github.com/Samarthre/voice-budget"
+Repository = "https://github.com/Samarthre/voice-budget"
+Documentation = "https://github.com/Samarthre/voice-budget#readme"
+Issues = "https://github.com/Samarthre/voice-budget/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["voice_budget"]
