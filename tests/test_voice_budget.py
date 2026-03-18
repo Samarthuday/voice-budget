@@ -5,6 +5,7 @@ Run: pytest tests/ -v
 """
 
 import asyncio
+import warnings
 from typing import Dict, List
 import pytest
 
@@ -58,6 +59,12 @@ async def variable_llm(messages, **kwargs) -> str:
 
 
 class TestTTFTMeasurer:
+
+    def test_deprecated_params_warn(self):
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            TTFTMeasurer(target_ms=800, p95_trigger=0.9)
+        assert any(issubclass(x.category, DeprecationWarning) for x in w)
 
     def test_no_stats_below_3_samples(self):
         m = TTFTMeasurer(target_ms=800)
@@ -356,8 +363,8 @@ class TestEffectiveTarget:
             await budget(msgs)
         history = budget.compression_history()
         # Compression should have been triggered despite tokens < token_budget
-        if history:
-            assert history[0].tokens_after < history[0].tokens_before
+        assert history, "Expected at least one compression event"
+        assert history[0].tokens_after < history[0].tokens_before
 
 
 class TestRollback:
@@ -391,5 +398,12 @@ class TestRollback:
         for _ in range(10):
             await budget(msgs)
 
-        # Verify the rollback flag mechanism exists and doesn't crash
+        # Verify rollback was detected and didn't crash
+        history = budget.compression_history()
         assert budget.stats() is not None
+        # If a rollback happened, verify it was flagged
+        rolled_back = [ev for ev in history if ev.rolled_back]
+        if rolled_back:
+            # After rollback, next call should have received more messages
+            # (the original uncompressed context)
+            assert len(received_msgs) >= 2, "Expected multiple LLM calls"

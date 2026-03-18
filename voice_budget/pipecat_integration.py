@@ -33,6 +33,7 @@ from typing import Optional
 
 from .compressors import BudgetCompressor
 from .core import TTFTMeasurer
+from .wrapper import compute_effective_target
 
 
 class VoiceBudgetProcessor:
@@ -153,10 +154,12 @@ class VoiceBudgetProcessor:
 
         ttft_before = s.p95_ms if s else 0.0
 
-        effective_target = self._compressor.target_tokens
-        if current_tokens <= effective_target and s:
-            ratio = self._target_ms / s.p95_ms
-            effective_target = max(int(current_tokens * ratio), 4)
+        effective_target = compute_effective_target(
+            current_tokens=current_tokens,
+            stats=s,
+            target_tokens=self._compressor.target_tokens,
+            target_ms=self._target_ms,
+        )
 
         compressed, strategy, removed = await self._compressor.compress(
             messages,

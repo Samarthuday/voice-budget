@@ -7,6 +7,7 @@ detects when context growth is causing latency to climb,
 and triggers the compression feedback loop.
 """
 
+import warnings
 from collections import deque
 from dataclasses import dataclass
 from typing import Any, Deque, Dict, List, Optional
@@ -61,12 +62,25 @@ class TTFTMeasurer:
     Framework-agnostic — works with Pipecat, LiveKit, raw asyncio.
     """
 
+    _DEPRECATED_PARAMS = frozenset({"p95_trigger", "on_budget_violation", "on_compression_needed"})
+
     def __init__(
         self,
         target_ms: float = 800.0,
         window_size: int = 20,
         model: str = "gpt-4o",
+        **kwargs,
     ):
+        for key in kwargs:
+            if key in self._DEPRECATED_PARAMS:
+                warnings.warn(
+                    f"{key!r} is deprecated and ignored; "
+                    "configure callbacks on VoiceBudget instead.",
+                    DeprecationWarning,
+                    stacklevel=2,
+                )
+            else:
+                raise TypeError(f"Unexpected keyword argument {key!r}")
         self.target_ms = target_ms
         self.window_size = window_size
         self.model = model

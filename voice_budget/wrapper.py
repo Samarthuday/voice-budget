@@ -14,10 +14,30 @@ Usage (Pipecat — see pipecat_integration.py for full example):
 """
 
 import time
+import warnings
+from collections.abc import AsyncIterator
 from typing import Any, Callable, Dict, List, Optional
 
 from .compressors import BudgetCompressor
 from .core import TTFTMeasurer
+
+
+def compute_effective_target(
+    current_tokens: int,
+    stats: Any,
+    target_tokens: int,
+    target_ms: float,
+) -> int:
+    """Compute a dynamic effective token target based on TTFT stats.
+
+    When tokens are already under the static budget but TTFT is high,
+    reduce proportionally to how far P95 exceeds target_ms.
+    """
+    effective_target = target_tokens
+    if current_tokens <= effective_target and stats:
+        ratio = target_ms / stats.p95_ms
+        effective_target = max(int(current_tokens * ratio), 4)
+    return effective_target
 
 
 class VoiceBudget:
@@ -44,6 +64,7 @@ class VoiceBudget:
         on_compression: Optional[Callable] = None,
         on_budget_violation: Optional[Callable] = None,
         verbose: bool = False,
+        accuracy_fn: Optional[Callable] = None,
     ):
         """
         Args:
@@ -57,11 +78,20 @@ class VoiceBudget:
             on_compression:    Callback(CompressionEvent) after each compression.
             on_budget_violation: Callback(BudgetStats) when P95 > target_ms.
             verbose:           Print compression decisions to stdout.
+            accuracy_fn:       DEPRECATED. Ignored. Will be removed in a future release.
         """
         self._llm_fn = llm_fn
         self._verbose = verbose
         self._on_compression = on_compression
         self._on_budget_violation = on_budget_violation
+
+        if accuracy_fn is not None:
+            warnings.warn(
+                "VoiceBudget(accuracy_fn=...) is deprecated and ignored. "
+                "It will be removed in a future release.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
 
         self._measurer = TTFTMeasurer(
             target_ms=target_ms,
@@ -90,12 +120,15 @@ class VoiceBudget:
         Drop-in replacement for your LLM function.
         Transparently measures, compresses, and feeds back.
         """
-        # Rollback: if last compression hurt, restore full context
+        # Rollback: if last compression hurt, restore full context and skip
+        # compression this turn so the restored context is actually used.
+        restored_context = False
         if self._restore_next_turn and self._last_good_messages is not None:
             if self._verbose:
                 print("[voice-budget] Restoring full context after harmful compression.")
             messages = self._last_good_messages
             self._last_good_messages = None
+            restored_context = True
         self._restore_next_turn = False
 
         messages = list(messages)  # defensive copy
@@ -104,7 +137,7 @@ class VoiceBudget:
         strategy_used = None
 
         # ── Step 1: Check if we need to compress ──────────────────────────────
-        if self._measurer.should_compress():
+        if (not restored_context) and self._measurer.should_compress():
             stats = self._measurer.stats()
             if self._verbose:
                 print(
@@ -123,12 +156,12 @@ class VoiceBudget:
             ttft_before = stats.p95_ms if stats else 0.0
 
             # ── Step 2: Compress ───────────────────────────────────────────────
-            # Calculate dynamic target: if tokens are already under budget but
-            # TTFT is high, reduce proportionally to how far P95 exceeds target.
-            effective_target = self._compressor.target_tokens
-            if current_tokens <= effective_target and stats:
-                ratio = self._measurer.target_ms / stats.p95_ms
-                effective_target = max(int(current_tokens * ratio), 4)
+            effective_target = compute_effective_target(
+                current_tokens=current_tokens,
+                stats=stats,
+                target_tokens=self._compressor.target_tokens,
+                target_ms=self._measurer.target_ms,
+            )
 
             compressed_msgs, strategy_used, tokens_removed = await self._compressor.compress(
                 messages,
@@ -162,13 +195,42 @@ class VoiceBudget:
             messages = compressed_msgs
             compressed = True
             current_tokens = tokens_after
+        else:
+            # No compression needed — clear stale rollback snapshot
+            self._last_good_messages = None
 
         # ── Step 3: Call LLM, measure TTFT ────────────────────────────────────
         start = time.perf_counter()
         result = await self._llm_fn(messages, **kwargs)
-        ttft_ms = (time.perf_counter() - start) * 1000
 
-        # ── Step 4: Record sample ──────────────────────────────────────────────
+        # Streaming: if result is an AsyncIterator, wrap it so we measure
+        # TTFT at first yielded chunk rather than at iterator creation.
+        if isinstance(result, AsyncIterator):
+            return self._wrap_streaming(
+                result, start, current_tokens, compressed, strategy_used
+            )
+
+        # Non-streaming: TTFT = total await time (approximation)
+        ttft_ms = (time.perf_counter() - start) * 1000
+        self._record_and_check(ttft_ms, current_tokens, compressed, strategy_used)
+        return result
+
+    async def _wrap_streaming(self, stream, start, current_tokens, compressed, strategy_used):
+        """Wrap an async iterator to measure TTFT at first chunk."""
+        first = True
+        async for chunk in stream:
+            if first:
+                first = False
+                ttft_ms = (time.perf_counter() - start) * 1000
+                self._record_and_check(ttft_ms, current_tokens, compressed, strategy_used)
+            yield chunk
+        # Edge case: empty stream
+        if first:
+            ttft_ms = (time.perf_counter() - start) * 1000
+            self._record_and_check(ttft_ms, current_tokens, compressed, strategy_used)
+
+    def _record_and_check(self, ttft_ms, current_tokens, compressed, strategy_used):
+        """Record a TTFT sample and check if rollback is needed."""
         self._measurer.record_sample(
             ttft_ms=ttft_ms,
             token_count=current_tokens,
@@ -176,9 +238,9 @@ class VoiceBudget:
             strategy=strategy_used,
         )
 
-        # ── Step 5: Check if compression helped; rollback if not ───────────────
         if compressed:
-            last_ev = self._measurer.compression_history()[-1] if self._measurer.compression_history() else None
+            history = self._measurer.compression_history()
+            last_ev = history[-1] if history else None
             if last_ev and last_ev.rolled_back and self._last_good_messages is not None:
                 self._restore_next_turn = True
                 if self._verbose:
@@ -196,8 +258,6 @@ class VoiceBudget:
                     f"P50={s.p50_ms:.0f}ms P95={s.p95_ms:.0f}ms "
                     f"tokens={s.token_count} jitter={s.jitter_ms:.0f}ms"
                 )
-
-        return result
 
 
     # ── Public stats API ───────────────────────────────────────────────────────
