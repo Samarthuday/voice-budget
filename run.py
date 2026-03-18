@@ -80,7 +80,7 @@ async def run_demo(turns: int, target_ms: int, verbose: bool):
         token_count = llm._measurer.count_tokens(messages)
         history = llm.compression_history()
         action = ""
-        if history and history[-1].turn == llm._measurer._turn:
+        if history and history[-1].turn == llm._measurer._turn - 1:
             ev = history[-1]
             action = f"[compressed: {ev.tokens_before}→{ev.tokens_after}t]"
 

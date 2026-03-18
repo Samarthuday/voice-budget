@@ -5,10 +5,14 @@
 Other libraries compress blindly. `voice-budget` measures TTFT before and after, auto-tunes, and rolls back if compression hurts.
 
 ```python
+import asyncio
 from voice_budget import wrap
 
-managed = wrap(your_llm, target_ms=800)
-response = await managed(messages)  # measures, compresses, verifies
+async def main():
+    managed = wrap(your_llm, target_ms=800)
+    response = await managed(messages)  # measures, compresses, verifies
+
+asyncio.run(main())
 ```
 
 ---
@@ -31,6 +35,7 @@ pip install "voice-budget[semantic]"
 ### Framework-agnostic
 
 ```python
+import asyncio
 from voice_budget import wrap
 
 async def my_llm(messages, **kwargs):
@@ -39,18 +44,21 @@ async def my_llm(messages, **kwargs):
     )
     return resp.choices[0].message.content
 
-managed = wrap(my_llm, target_ms=800, verbose=True)
+async def voice_loop():
+    managed = wrap(my_llm, target_ms=800, verbose=True)
+    messages = [{"role": "system", "content": "You are a voice assistant."}]
+    while True:
+        messages.append({"role": "user", "content": await get_user_speech()})
+        response = await managed(messages)
+        messages.append({"role": "assistant", "content": response})
 
-messages = [{"role": "system", "content": "You are a voice assistant."}]
-while True:
-    messages.append({"role": "user", "content": await get_user_speech()})
-    response = await managed(messages)
-    messages.append({"role": "assistant", "content": response})
+asyncio.run(voice_loop())
 ```
 
 ### Pipecat
 
 ```python
+from pipecat.pipeline.pipeline import Pipeline
 from voice_budget.pipecat_integration import VoiceBudgetProcessor
 
 budget = VoiceBudgetProcessor(target_ms=800, verbose=True)

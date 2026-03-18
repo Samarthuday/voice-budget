@@ -77,6 +77,7 @@ class VoiceBudget:
 
         # Last known good messages (for rollback)
         self._last_good_messages: Optional[List[Dict]] = None
+        self._restore_next_turn: bool = False
 
     # ── Main call ─────────────────────────────────────────────────────────────
 
@@ -89,6 +90,14 @@ class VoiceBudget:
         Drop-in replacement for your LLM function.
         Transparently measures, compresses, and feeds back.
         """
+        # Rollback: if last compression hurt, restore full context
+        if self._restore_next_turn and self._last_good_messages is not None:
+            if self._verbose:
+                print("[voice-budget] Restoring full context after harmful compression.")
+            messages = self._last_good_messages
+            self._last_good_messages = None
+        self._restore_next_turn = False
+
         messages = list(messages)  # defensive copy
         current_tokens = self._measurer.count_tokens(messages)
         compressed = False
@@ -171,6 +180,7 @@ class VoiceBudget:
         if compressed:
             last_ev = self._measurer.compression_history()[-1] if self._measurer.compression_history() else None
             if last_ev and last_ev.rolled_back and self._last_good_messages is not None:
+                self._restore_next_turn = True
                 if self._verbose:
                     print(
                         f"[voice-budget] Compression hurt latency "
