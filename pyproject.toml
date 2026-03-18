@@ -1,0 +1,45 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "voice-budget"
+version = "0.1.0"
+description = "The only voice agent context manager with a TTFT feedback loop. Compresses, measures, auto-tunes."
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+keywords = ["voice", "agent", "LLM", "TTFT", "latency", "context", "compression", "pipecat", "livekit"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+
+dependencies = [
+    "numpy>=1.24.0",
+    "tiktoken>=0.7.0",
+]
+
+[project.optional-dependencies]
+semantic = ["sentence-transformers>=3.0.0"]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "httpx>=0.27.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/YOUR_HANDLE/voice-budget"
+Documentation = "https://github.com/YOUR_HANDLE/voice-budget#readme"
+Issues = "https://github.com/YOUR_HANDLE/voice-budget/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["voice_budget"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"

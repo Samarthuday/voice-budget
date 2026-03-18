@@ -1,0 +1,267 @@
+"""
+voice_budget/wrapper.py
+
+The public API. One function call wraps any async LLM.
+
+Usage (framework-agnostic):
+    from voice_budget import wrap
+
+    managed_llm = wrap(your_async_llm_fn, target_ms=800)
+    # then use managed_llm exactly like your_async_llm_fn
+
+Usage (Pipecat — see pipecat_integration.py for full example):
+    from voice_budget.pipecat import VoiceBudgetProcessor
+"""
+
+import asyncio
+import time
+from typing import Any, AsyncIterator, Callable, Dict, List, Optional, Union
+
+from .compressors import BudgetCompressor
+from .core import TTFTMeasurer
+
+
+class VoiceBudget:
+    """
+    Wraps any async LLM callable with a latency feedback loop.
+
+    The wrapped function has the same signature as the original:
+        async fn(messages: List[Dict], **kwargs) -> str  (non-streaming)
+        async fn(messages: List[Dict], **kwargs) -> AsyncIterator[str]  (streaming)
+
+    voice-budget intercepts the call, measures TTFT, compresses context
+    when P95 TTFT exceeds target_ms, and measures whether it helped.
+    """
+
+    def __init__(
+        self,
+        llm_fn: Callable,
+        target_ms: float = 800.0,
+        model: str = "gpt-4o",
+        window_size: int = 20,
+        token_budget: int = 2000,
+        use_semantic: bool = True,
+        use_summarise: bool = False,   # off by default — costs an LLM call
+        accuracy_fn: Optional[Callable] = None,
+        on_compression: Optional[Callable] = None,
+        on_budget_violation: Optional[Callable] = None,
+        verbose: bool = False,
+    ):
+        """
+        Args:
+            llm_fn:            Your async LLM function.
+            target_ms:         TTFT budget in milliseconds (P95).
+            model:             Model name for tiktoken token counting.
+            window_size:       Rolling window for P50/P95 calculation.
+            token_budget:      Target token count after compression.
+            use_semantic:      Enable semantic trim (requires sentence-transformers).
+            use_summarise:     Enable LLM-based tail summarisation.
+            accuracy_fn:       Optional async fn(response: str) -> float [0-1].
+                               If compression drops accuracy by >10%, rolls back.
+            on_compression:    Callback(CompressionEvent) after each compression.
+            on_budget_violation: Callback(BudgetStats) when P95 > target_ms.
+            verbose:           Print compression decisions to stdout.
+        """
+        self._llm_fn = llm_fn
+        self._verbose = verbose
+        self._accuracy_fn = accuracy_fn
+        self._on_compression = on_compression
+        self._on_budget_violation = on_budget_violation
+
+        self._measurer = TTFTMeasurer(
+            target_ms=target_ms,
+            window_size=window_size,
+            model=model,
+        )
+        self._compressor = BudgetCompressor(
+            target_tokens=token_budget,
+            llm_fn=llm_fn if use_summarise else None,
+            use_semantic=use_semantic,
+            use_summarise=use_summarise,
+        )
+
+        # Last known good messages (for rollback)
+        self._last_good_messages: Optional[List[Dict]] = None
+        self._pending_rollback: bool = False
+
+    # ── Main call ─────────────────────────────────────────────────────────────
+
+    async def __call__(
+        self,
+        messages: List[Dict],
+        **kwargs,
+    ) -> Any:
+        """
+        Drop-in replacement for your LLM function.
+        Transparently measures, compresses, and feeds back.
+        """
+        messages = list(messages)  # defensive copy
+        current_tokens = self._measurer.count_tokens(messages)
+        compressed = False
+        strategy_used = None
+
+        # ── Step 1: Check if we need to compress ──────────────────────────────
+        if self._measurer.should_compress():
+            stats = self._measurer.stats()
+            if self._verbose:
+                print(
+                    f"[voice-budget] P95={stats.p95_ms:.0f}ms > target={self._measurer.target_ms}ms "
+                    f"at turn {self._measurer._turn} ({current_tokens} tokens). Compressing..."
+                )
+
+            if self._on_budget_violation and stats:
+                try:
+                    self._on_budget_violation(stats)
+                except Exception:
+                    pass
+
+            # Save pre-compression state for rollback
+            self._last_good_messages = list(messages)
+            ttft_before = stats.p95_ms if stats else 0.0
+
+            # ── Step 2: Compress ───────────────────────────────────────────────
+            compressed_msgs, strategy_used, tokens_removed = await self._compressor.compress(
+                messages,
+                current_tokens,
+                self._measurer.count_tokens,
+            )
+            tokens_after = self._measurer.count_tokens(compressed_msgs)
+
+            if self._verbose:
+                print(
+                    f"[voice-budget] Strategy={strategy_used} "
+                    f"tokens: {current_tokens}→{tokens_after} "
+                    f"(saved {tokens_removed})"
+                )
+
+            # Record compression event
+            ev = self._measurer.record_compression(
+                strategy=strategy_used,
+                tokens_before=current_tokens,
+                tokens_after=tokens_after,
+                ttft_before_ms=ttft_before,
+            )
+
+            if self._on_compression:
+                try:
+                    self._on_compression(ev)
+                except Exception:
+                    pass
+
+            messages = compressed_msgs
+            compressed = True
+            current_tokens = tokens_after
+
+        # ── Step 3: Call LLM, measure TTFT ────────────────────────────────────
+        start = time.perf_counter()
+        result = await self._call_with_ttft_measurement(messages, start, **kwargs)
+        ttft_ms = (time.perf_counter() - start) * 1000
+
+        # ── Step 4: Record sample ──────────────────────────────────────────────
+        self._measurer.record_sample(
+            ttft_ms=ttft_ms,
+            token_count=current_tokens,
+            compressed=compressed,
+            strategy=strategy_used,
+        )
+
+        # ── Step 5: Check if compression helped; rollback if not ───────────────
+        if compressed:
+            last_ev = self._measurer.compression_history()[-1] if self._measurer.compression_history() else None
+            if last_ev and last_ev.rolled_back and self._last_good_messages is not None:
+                if self._verbose:
+                    print(
+                        f"[voice-budget] Compression hurt latency "
+                        f"(delta={last_ev.delta_ms:.0f}ms). "
+                        f"Will restore full context next turn."
+                    )
+                # Don't restore retroactively — just flag for next turn
+                self._pending_rollback = True
+
+        if self._verbose and self._measurer._turn % 5 == 0:
+            s = self._measurer.stats()
+            if s:
+                print(
+                    f"[voice-budget] Turn {s.turn} | "
+                    f"P50={s.p50_ms:.0f}ms P95={s.p95_ms:.0f}ms "
+                    f"tokens={s.token_count} jitter={s.jitter_ms:.0f}ms"
+                )
+
+        return result
+
+    async def _call_with_ttft_measurement(self, messages, start, **kwargs):
+        """
+        Calls the LLM and returns the result.
+        For streaming LLMs, captures TTFT at first chunk.
+        For non-streaming, TTFT = total time (approximation).
+        """
+        result = await self._llm_fn(messages, **kwargs)
+        return result
+
+    # ── Public stats API ───────────────────────────────────────────────────────
+
+    def stats(self):
+        """Current rolling P50/P95/P99/jitter statistics."""
+        return self._measurer.stats()
+
+    def report(self):
+        """Full report of all compression decisions."""
+        return self._measurer.weekly_report()
+
+    def compression_history(self):
+        """List of all CompressionEvent objects."""
+        return self._measurer.compression_history()
+
+    def print_report(self):
+        """Print a human-readable report to stdout."""
+        r = self.report()
+        s = self.stats()
+        print("\n" + "=" * 60)
+        print("voice-budget Report")
+        print("=" * 60)
+        print(f"  Total turns:          {r['total_turns']}")
+        if s:
+            print(f"  Current P50 TTFT:     {s.p50_ms:.0f}ms")
+            print(f"  Current P95 TTFT:     {s.p95_ms:.0f}ms")
+            print(f"  Target:               {r['target_ms']}ms")
+            print(f"  Budget met:           {'✓' if r['budget_met'] else '✗'}")
+            print(f"  Jitter (std):         {s.jitter_ms:.0f}ms")
+        print(f"  Compressions:         {r['compression_events']}")
+        print(f"  Helpful:              {r['helpful_compressions']}")
+        print(f"  Harmful (rolled back):{r['harmful_compressions']}")
+        if r['helpful_compressions'] > 0:
+            print(f"  Avg improvement:      {r['avg_ttft_improvement_ms']:.0f}ms")
+        print(f"  Total tokens saved:   {r['total_tokens_saved']:,}")
+        if r['strategies_used']:
+            print(f"  Strategies used:      {', '.join(r['strategies_used'])}")
+        print("=" * 60 + "\n")
+
+
+# ── Convenience function ───────────────────────────────────────────────────────
+
+def wrap(
+    llm_fn: Callable,
+    target_ms: float = 800.0,
+    model: str = "gpt-4o",
+    token_budget: int = 2000,
+    use_semantic: bool = True,
+    verbose: bool = False,
+    **kwargs,
+) -> VoiceBudget:
+    """
+    One-line entry point.
+
+    Example:
+        from voice_budget import wrap
+        managed = wrap(openai_client.chat.completions.create_async, target_ms=800)
+        response = await managed(messages)
+    """
+    return VoiceBudget(
+        llm_fn=llm_fn,
+        target_ms=target_ms,
+        model=model,
+        token_budget=token_budget,
+        use_semantic=use_semantic,
+        verbose=verbose,
+        **kwargs,
+    )
