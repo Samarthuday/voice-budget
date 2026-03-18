@@ -7,9 +7,10 @@ detects when context growth is causing latency to climb,
 and triggers the compression feedback loop.
 """
 
+import warnings
 from collections import deque
 from dataclasses import dataclass
-from typing import Any, Callable, Deque, Dict, List, Optional
+from typing import Any, Deque, Dict, List, Optional
 
 import numpy as np
 import tiktoken
@@ -61,21 +62,40 @@ class TTFTMeasurer:
     Framework-agnostic — works with Pipecat, LiveKit, raw asyncio.
     """
 
+    _DEPRECATED_PARAMS = frozenset({"p95_trigger", "on_budget_violation", "on_compression_needed"})
+
     def __init__(
         self,
         target_ms: float = 800.0,
         window_size: int = 20,
-        p95_trigger: float = 0.95,         # fire when P95 > target_ms
+        p95_trigger=None,
         model: str = "gpt-4o",
-        on_budget_violation: Optional[Callable] = None,
-        on_compression_needed: Optional[Callable] = None,
+        on_budget_violation=None,
+        on_compression_needed=None,
+        **kwargs,
     ):
+        # Warn on explicitly-passed deprecated params (supports positional callers).
+        if p95_trigger is not None or on_budget_violation is not None or on_compression_needed is not None:
+            warnings.warn(
+                "'p95_trigger', 'on_budget_violation', and 'on_compression_needed' "
+                "are deprecated and ignored; configure callbacks on VoiceBudget instead.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+        # Warn on any remaining deprecated kwargs.
+        for key in kwargs:
+            if key in self._DEPRECATED_PARAMS:
+                warnings.warn(
+                    f"{key!r} is deprecated and ignored; "
+                    "configure callbacks on VoiceBudget instead.",
+                    DeprecationWarning,
+                    stacklevel=2,
+                )
+            else:
+                raise TypeError(f"Unexpected keyword argument {key!r}")
         self.target_ms = target_ms
         self.window_size = window_size
-        self.p95_trigger = p95_trigger
         self.model = model
-        self.on_budget_violation = on_budget_violation
-        self.on_compression_needed = on_compression_needed
 
         self._samples: Deque[TTFTSample] = deque(maxlen=window_size)
         self._compression_events: List[CompressionEvent] = []
@@ -178,7 +198,7 @@ class TTFTMeasurer:
     def compression_history(self) -> List[CompressionEvent]:
         return list(self._compression_events)
 
-    def weekly_report(self) -> Dict[str, Any]:
+    def snapshot_report(self) -> Dict[str, Any]:
         """Generate a structured report of all compression decisions."""
         events = self._compression_events
         helpful = [e for e in events if e.delta_ms and e.delta_ms > 0]

@@ -33,6 +33,7 @@ from typing import Optional
 
 from .compressors import BudgetCompressor
 from .core import TTFTMeasurer
+from .wrapper import compute_effective_target
 
 
 class VoiceBudgetProcessor:
@@ -119,7 +120,7 @@ class VoiceBudgetProcessor:
                         history = self._measurer.compression_history()
                         last_ev = history[-1] if history else None
                         action = ""
-                        if last_ev and last_ev.turn == self._measurer._turn:
+                        if last_ev and last_ev.turn == self._measurer._turn - 1:
                             action = f" [{last_ev.strategy}]"
                         print(
                             f"[voice-budget/pipecat] "
@@ -152,10 +153,19 @@ class VoiceBudgetProcessor:
                 pass
 
         ttft_before = s.p95_ms if s else 0.0
+
+        effective_target = compute_effective_target(
+            current_tokens=current_tokens,
+            stats=s,
+            target_tokens=self._compressor.target_tokens,
+            target_ms=self._target_ms,
+        )
+
         compressed, strategy, removed = await self._compressor.compress(
             messages,
             current_tokens,
             self._measurer.count_tokens,
+            effective_target=effective_target,
         )
         tokens_after = self._measurer.count_tokens(compressed)
 
@@ -188,7 +198,7 @@ class VoiceBudgetProcessor:
         return self._measurer.compression_history()
 
     def report(self):
-        return self._measurer.weekly_report()
+        return self._measurer.snapshot_report()
 
     # Pipecat requires push_frame — subclasses provide real implementation
     async def push_frame(self, frame, direction):

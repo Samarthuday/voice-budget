@@ -13,6 +13,13 @@ from abc import ABC, abstractmethod
 from typing import Callable, Dict, List, Optional, Tuple
 
 
+DEFAULT_SUMMARY_PROMPT = (
+    "Summarise the following conversation history into a single "
+    "concise paragraph. Preserve all important facts, decisions, "
+    "user preferences, and context. Be specific."
+)
+
+
 # ── Base ──────────────────────────────────────────────────────────────────────
 
 class BaseCompressor(ABC):
@@ -176,13 +183,15 @@ class SummariseTailCompressor(BaseCompressor):
     """
     name = "summarise_tail"
 
-    def __init__(self, llm_fn: Optional[Callable] = None, tail_turns: int = 10):
+    def __init__(self, llm_fn: Optional[Callable] = None, tail_turns: int = 10, summary_prompt: Optional[str] = None):
         """
         llm_fn: async callable that takes a messages list and returns a string.
-        tail_turns: how many oldest turns to summarise.
+        tail_turns: how many oldest messages to summarise (not conversation turns/pairs).
+        summary_prompt: custom prompt for summarisation. Uses DEFAULT_SUMMARY_PROMPT if None.
         """
         self._llm_fn = llm_fn
         self._tail_turns = tail_turns
+        self._summary_prompt = summary_prompt or DEFAULT_SUMMARY_PROMPT
 
     def compress(
         self,
@@ -210,9 +219,28 @@ class SummariseTailCompressor(BaseCompressor):
         system_msgs = messages[:1] if has_system else []
         body = messages[1:] if has_system else messages
 
-        # Protect last 4 turns (2 exchanges)
-        protected_recent = body[-4:] if len(body) > 4 else body
-        to_summarise = body[:-4] if len(body) > 4 else []
+        # Summarise only the oldest `tail_turns` messages, keep the rest.
+        # Always protect the last user message so the LLM sees the latest query.
+        tail_turns = max(0, int(self._tail_turns))
+        if tail_turns == 0 or not body:
+            return list(messages), 0
+
+        # Find the last user message index so we never summarise it.
+        last_user_idx: Optional[int] = None
+        for idx in range(len(body) - 1, -1, -1):
+            if body[idx].get("role") == "user":
+                last_user_idx = idx
+                break
+
+        if last_user_idx is None:
+            # No user messages — safe to summarise up to tail_turns.
+            split_idx = min(len(body), tail_turns)
+        else:
+            # Never include the last user message in the summarised slice.
+            split_idx = min(tail_turns, last_user_idx)
+
+        to_summarise = body[:split_idx]
+        protected_recent = body[split_idx:]
 
         if not to_summarise:
             return list(messages), 0
@@ -222,9 +250,7 @@ class SummariseTailCompressor(BaseCompressor):
             {
                 "role": "user",
                 "content": (
-                    "Summarise the following conversation history into a single "
-                    "concise paragraph. Preserve all important facts, decisions, "
-                    "user preferences, and context. Be specific.\n\n"
+                    self._summary_prompt + "\n\n"
                     + "\n".join(
                         f"{m['role'].upper()}: {m.get('content', '')}"
                         for m in to_summarise
@@ -277,19 +303,23 @@ class BudgetCompressor:
         messages: List[Dict],
         current_tokens: int,
         token_counter: Optional[Callable] = None,
+        effective_target: Optional[int] = None,
     ) -> Tuple[List[Dict], str, int]:
         """
         Returns (compressed_messages, strategy_used, tokens_removed).
         Tries strategies in order, stops when target is met.
+
+        effective_target: override target_tokens for this call (e.g. TTFT-proportional).
         """
+        target = effective_target if effective_target is not None else self.target_tokens
         for strategy in self._strategies:
             if isinstance(strategy, SummariseTailCompressor):
                 compressed, removed = await strategy.async_compress(
-                    messages, self.target_tokens, current_tokens, token_counter
+                    messages, target, current_tokens, token_counter
                 )
             else:
                 compressed, removed = strategy.compress(
-                    messages, self.target_tokens, current_tokens, token_counter
+                    messages, target, current_tokens, token_counter
                 )
 
             if token_counter:
@@ -297,9 +327,8 @@ class BudgetCompressor:
             else:
                 new_tokens = current_tokens - removed
 
-            if new_tokens <= self.target_tokens:
+            if new_tokens <= target:
                 return compressed, strategy.name, removed
 
         # Fallback: return last attempt even if target not fully met
         return compressed, strategy.name, removed
-        return compressed, self._strategies[-1].name, removed

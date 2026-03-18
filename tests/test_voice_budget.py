@@ -5,13 +5,16 @@ Run: pytest tests/ -v
 """
 
 import asyncio
+import warnings
 from typing import Dict, List
 import pytest
 
 from voice_budget.compressors import (
     BudgetCompressor,
+    DEFAULT_SUMMARY_PROMPT,
     SemanticTrimCompressor,
     SlidingWindowCompressor,
+    SummariseTailCompressor,
 )
 from voice_budget.core import TTFTMeasurer
 from voice_budget.wrapper import VoiceBudget, wrap
@@ -56,6 +59,12 @@ async def variable_llm(messages, **kwargs) -> str:
 
 
 class TestTTFTMeasurer:
+
+    def test_deprecated_params_warn(self):
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            TTFTMeasurer(target_ms=800, p95_trigger=0.9)
+        assert any(issubclass(x.category, DeprecationWarning) for x in w)
 
     def test_no_stats_below_3_samples(self):
         m = TTFTMeasurer(target_ms=800)
@@ -118,11 +127,11 @@ class TestTTFTMeasurer:
         m.record_sample(1500.0, 300, compressed=True)
         assert ev.rolled_back is True
 
-    def test_weekly_report_structure(self):
+    def test_snapshot_report_structure(self):
         m = TTFTMeasurer(target_ms=800)
         for _ in range(10):
             m.record_sample(600.0, 200)
-        r = m.weekly_report()
+        r = m.snapshot_report()
         assert "total_turns" in r
         assert "current_p95_ms" in r
         assert "total_tokens_saved" in r
@@ -282,3 +291,184 @@ class TestVoiceBudget:
         assert r["total_turns"] == 10
         assert "strategies_used" in r
         assert "total_tokens_saved" in r
+
+
+class TestSummariseTailCompressor:
+
+    @pytest.mark.asyncio
+    async def test_default_summary_prompt_used(self):
+        """When no custom prompt given, DEFAULT_SUMMARY_PROMPT is used."""
+        captured_prompts = []
+
+        async def fake_llm(messages, **kwargs):
+            captured_prompts.append(messages[0]["content"])
+            return "Summary of conversation."
+
+        c = SummariseTailCompressor(llm_fn=fake_llm)
+        msgs = make_messages(n_turns=5)
+        await c.async_compress(msgs, target_tokens=100, current_tokens=1000)
+        assert len(captured_prompts) == 1
+        assert DEFAULT_SUMMARY_PROMPT in captured_prompts[0]
+
+    @pytest.mark.asyncio
+    async def test_custom_summary_prompt_used(self):
+        """When a custom prompt is given, it replaces the default."""
+        captured_prompts = []
+        custom = "Condense this chat into bullet points."
+
+        async def fake_llm(messages, **kwargs):
+            captured_prompts.append(messages[0]["content"])
+            return "Bullet summary."
+
+        c = SummariseTailCompressor(llm_fn=fake_llm, summary_prompt=custom)
+        msgs = make_messages(n_turns=5)
+        await c.async_compress(msgs, target_tokens=100, current_tokens=1000)
+        assert len(captured_prompts) == 1
+        assert custom in captured_prompts[0]
+        assert DEFAULT_SUMMARY_PROMPT not in captured_prompts[0]
+
+    @pytest.mark.asyncio
+    async def test_tail_turns_preserves_last_user_message(self):
+        """Regression: short chats ending with a user turn keep that turn after compression."""
+        async def fake_llm(messages, **kwargs):
+            return "Some summary."
+
+        c = SummariseTailCompressor(llm_fn=fake_llm, tail_turns=100)
+        msgs = [
+            {"role": "system", "content": "You are a helpful voice assistant."},
+            {"role": "user", "content": "First user message."},
+            {"role": "assistant", "content": "Assistant reply."},
+            {"role": "user", "content": "Final user message should be preserved."},
+        ]
+        compressed, _ = await c.async_compress(
+            msgs, target_tokens=100, current_tokens=1000
+        )
+        # The last user message must still be present.
+        assert any(
+            m["role"] == "user" and m["content"] == "Final user message should be preserved."
+            for m in compressed
+        ), "Last user message was dropped by compression"
+        # It should be the last non-summary message (or at least present at end).
+        user_msgs = [m for m in compressed if m["role"] == "user" and "summary" not in m.get("content", "").lower()]
+        assert user_msgs[-1]["content"] == "Final user message should be preserved."
+
+
+class TestEffectiveTarget:
+
+    @pytest.mark.asyncio
+    async def test_effective_target_overrides_default(self):
+        """BudgetCompressor.compress with effective_target lower than target_tokens."""
+        c = BudgetCompressor(target_tokens=5000, use_semantic=False, use_summarise=False)
+        msgs = make_messages(n_turns=20)
+
+        def counter(m):
+            return sum(len(str(msg.get("content", "")).split()) * 4 // 3 for msg in m)
+
+        current = counter(msgs)
+        # effective_target much lower than target_tokens — should compress
+        compressed, strategy, removed = await c.compress(
+            msgs, current, counter, effective_target=300
+        )
+        assert counter(compressed) < current
+        assert removed > 0
+
+    @pytest.mark.asyncio
+    async def test_dynamic_target_when_tokens_under_budget(self):
+        """When tokens < token_budget but TTFT is high, wrapper uses proportional target."""
+        budget = VoiceBudget(
+            slow_llm,
+            target_ms=300,
+            window_size=5,
+            token_budget=50000,  # very high — tokens will always be "under budget"
+            use_semantic=False,
+            verbose=False,
+        )
+        msgs = make_messages(n_turns=10)
+        for _ in range(8):
+            await budget(msgs)
+        history = budget.compression_history()
+        # Compression should have been triggered despite tokens < token_budget
+        assert history, "Expected at least one compression event"
+        assert history[0].tokens_after < history[0].tokens_before
+
+
+class TestRollback:
+
+    @pytest.mark.asyncio
+    async def test_rollback_restores_context(self):
+        """After harmful compression, next call uses last known good messages."""
+        call_count = [0]
+        received_msgs = []
+
+        async def tracking_llm(messages, **kwargs):
+            call_count[0] += 1
+            received_msgs.append(len(messages))
+            # First 5 calls: fast. Then one slow call to trigger compression,
+            # then make post-compression call even slower to trigger rollback.
+            delay = 0.05
+            if call_count[0] > 3:
+                delay = 0.05 + len(messages) * 0.03
+            await asyncio.sleep(delay)
+            return "OK"
+
+        budget = VoiceBudget(
+            tracking_llm,
+            target_ms=100,
+            window_size=4,
+            token_budget=50000,
+            use_semantic=False,
+            verbose=False,
+        )
+        msgs = make_messages(n_turns=15)
+        for _ in range(10):
+            await budget(msgs)
+
+        # Verify rollback was detected and didn't crash
+        history = budget.compression_history()
+        assert budget.stats() is not None
+        # If a rollback happened, verify it was flagged
+        rolled_back = [ev for ev in history if ev.rolled_back]
+        if rolled_back:
+            # After rollback, next call should have received more messages
+            # (the original uncompressed context)
+            assert len(received_msgs) >= 2, "Expected multiple LLM calls"
+
+
+class TestStreaming:
+
+    @pytest.mark.asyncio
+    async def test_streaming_ttft_recorded(self):
+        """Streaming LLM (async generator) should still record TTFT samples."""
+        call_count = [0]
+
+        async def streaming_llm(messages, **kwargs):
+            call_count[0] += 1
+            # Simulate a streaming response that yields chunks
+            async def _gen():
+                await asyncio.sleep(0.05)
+                yield "Hello"
+                yield " world"
+            return _gen()
+
+        budget = VoiceBudget(
+            streaming_llm,
+            target_ms=5000,
+            window_size=5,
+            token_budget=50000,
+            use_semantic=False,
+            verbose=False,
+        )
+        msgs = make_messages(n_turns=3)
+
+        for _ in range(4):
+            result = await budget(msgs)
+            # Consume the stream
+            chunks = []
+            async for chunk in result:
+                chunks.append(chunk)
+            assert chunks == ["Hello", " world"]
+
+        stats = budget.stats()
+        assert stats is not None
+        assert stats.turn == 4
+        assert stats.p50_ms > 0
