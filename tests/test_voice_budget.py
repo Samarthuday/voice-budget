@@ -118,11 +118,11 @@ class TestTTFTMeasurer:
         m.record_sample(1500.0, 300, compressed=True)
         assert ev.rolled_back is True
 
-    def test_weekly_report_structure(self):
+    def test_snapshot_report_structure(self):
         m = TTFTMeasurer(target_ms=800)
         for _ in range(10):
             m.record_sample(600.0, 200)
-        r = m.weekly_report()
+        r = m.snapshot_report()
         assert "total_turns" in r
         assert "current_p95_ms" in r
         assert "total_tokens_saved" in r

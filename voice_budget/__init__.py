@@ -1,7 +1,13 @@
 """voice_budget/__init__.py"""
 from .wrapper import VoiceBudget, wrap
 from .core import TTFTMeasurer, BudgetStats, TTFTSample, CompressionEvent
-from .compressors import BudgetCompressor, SlidingWindowCompressor, SemanticTrimCompressor, SummariseTailCompressor
+from .compressors import (
+    BudgetCompressor,
+    SlidingWindowCompressor,
+    SemanticTrimCompressor,
+    SummariseTailCompressor,
+    DEFAULT_SUMMARY_PROMPT,
+)
 
 __version__ = "0.1.0"
 __all__ = [
@@ -15,4 +21,5 @@ __all__ = [
     "SlidingWindowCompressor",
     "SemanticTrimCompressor",
     "SummariseTailCompressor",
+    "DEFAULT_SUMMARY_PROMPT",
 ]

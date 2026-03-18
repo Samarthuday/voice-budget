@@ -9,7 +9,7 @@ and triggers the compression feedback loop.
 
 from collections import deque
 from dataclasses import dataclass
-from typing import Any, Callable, Deque, Dict, List, Optional
+from typing import Any, Deque, Dict, List, Optional
 
 import numpy as np
 import tiktoken
@@ -65,17 +65,11 @@ class TTFTMeasurer:
         self,
         target_ms: float = 800.0,
         window_size: int = 20,
-        p95_trigger: float = 0.95,         # fire when P95 > target_ms
         model: str = "gpt-4o",
-        on_budget_violation: Optional[Callable] = None,
-        on_compression_needed: Optional[Callable] = None,
     ):
         self.target_ms = target_ms
         self.window_size = window_size
-        self.p95_trigger = p95_trigger
         self.model = model
-        self.on_budget_violation = on_budget_violation
-        self.on_compression_needed = on_compression_needed
 
         self._samples: Deque[TTFTSample] = deque(maxlen=window_size)
         self._compression_events: List[CompressionEvent] = []
@@ -178,7 +172,7 @@ class TTFTMeasurer:
     def compression_history(self) -> List[CompressionEvent]:
         return list(self._compression_events)
 
-    def weekly_report(self) -> Dict[str, Any]:
+    def snapshot_report(self) -> Dict[str, Any]:
         """Generate a structured report of all compression decisions."""
         events = self._compression_events
         helpful = [e for e in events if e.delta_ms and e.delta_ms > 0]

@@ -152,10 +152,17 @@ class VoiceBudgetProcessor:
                 pass
 
         ttft_before = s.p95_ms if s else 0.0
+
+        effective_target = self._compressor.target_tokens
+        if current_tokens <= effective_target and s:
+            ratio = self._target_ms / s.p95_ms
+            effective_target = max(int(current_tokens * ratio), 4)
+
         compressed, strategy, removed = await self._compressor.compress(
             messages,
             current_tokens,
             self._measurer.count_tokens,
+            effective_target=effective_target,
         )
         tokens_after = self._measurer.count_tokens(compressed)
 
@@ -188,7 +195,7 @@ class VoiceBudgetProcessor:
         return self._measurer.compression_history()
 
     def report(self):
-        return self._measurer.weekly_report()
+        return self._measurer.snapshot_report()
 
     # Pipecat requires push_frame — subclasses provide real implementation
     async def push_frame(self, frame, direction):

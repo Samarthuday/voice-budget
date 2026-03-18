@@ -41,7 +41,6 @@ class VoiceBudget:
         token_budget: int = 2000,
         use_semantic: bool = True,
         use_summarise: bool = False,   # off by default — costs an LLM call
-        accuracy_fn: Optional[Callable] = None,
         on_compression: Optional[Callable] = None,
         on_budget_violation: Optional[Callable] = None,
         verbose: bool = False,
@@ -55,15 +54,12 @@ class VoiceBudget:
             token_budget:      Target token count after compression.
             use_semantic:      Enable semantic trim (requires sentence-transformers).
             use_summarise:     Enable LLM-based tail summarisation.
-            accuracy_fn:       Optional async fn(response: str) -> float [0-1].
-                               If compression drops accuracy by >10%, rolls back.
             on_compression:    Callback(CompressionEvent) after each compression.
             on_budget_violation: Callback(BudgetStats) when P95 > target_ms.
             verbose:           Print compression decisions to stdout.
         """
         self._llm_fn = llm_fn
         self._verbose = verbose
-        self._accuracy_fn = accuracy_fn
         self._on_compression = on_compression
         self._on_budget_violation = on_budget_violation
 
@@ -81,7 +77,6 @@ class VoiceBudget:
 
         # Last known good messages (for rollback)
         self._last_good_messages: Optional[List[Dict]] = None
-        self._pending_rollback: bool = False
 
     # ── Main call ─────────────────────────────────────────────────────────────
 
@@ -119,10 +114,18 @@ class VoiceBudget:
             ttft_before = stats.p95_ms if stats else 0.0
 
             # ── Step 2: Compress ───────────────────────────────────────────────
+            # Calculate dynamic target: if tokens are already under budget but
+            # TTFT is high, reduce proportionally to how far P95 exceeds target.
+            effective_target = self._compressor.target_tokens
+            if current_tokens <= effective_target and stats:
+                ratio = self._measurer.target_ms / stats.p95_ms
+                effective_target = max(int(current_tokens * ratio), 4)
+
             compressed_msgs, strategy_used, tokens_removed = await self._compressor.compress(
                 messages,
                 current_tokens,
                 self._measurer.count_tokens,
+                effective_target=effective_target,
             )
             tokens_after = self._measurer.count_tokens(compressed_msgs)
 
@@ -153,7 +156,7 @@ class VoiceBudget:
 
         # ── Step 3: Call LLM, measure TTFT ────────────────────────────────────
         start = time.perf_counter()
-        result = await self._call_with_ttft_measurement(messages, start, **kwargs)
+        result = await self._llm_fn(messages, **kwargs)
         ttft_ms = (time.perf_counter() - start) * 1000
 
         # ── Step 4: Record sample ──────────────────────────────────────────────
@@ -174,8 +177,6 @@ class VoiceBudget:
                         f"(delta={last_ev.delta_ms:.0f}ms). "
                         f"Will restore full context next turn."
                     )
-                # Don't restore retroactively — just flag for next turn
-                self._pending_rollback = True
 
         if self._verbose and self._measurer._turn % 5 == 0:
             s = self._measurer.stats()
@@ -188,14 +189,6 @@ class VoiceBudget:
 
         return result
 
-    async def _call_with_ttft_measurement(self, messages, start, **kwargs):
-        """
-        Calls the LLM and returns the result.
-        For streaming LLMs, captures TTFT at first chunk.
-        For non-streaming, TTFT = total time (approximation).
-        """
-        result = await self._llm_fn(messages, **kwargs)
-        return result
 
     # ── Public stats API ───────────────────────────────────────────────────────
 
@@ -205,7 +198,7 @@ class VoiceBudget:
 
     def report(self):
         """Full report of all compression decisions."""
-        return self._measurer.weekly_report()
+        return self._measurer.snapshot_report()
 
     def compression_history(self):
         """List of all CompressionEvent objects."""
