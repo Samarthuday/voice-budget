@@ -69,8 +69,20 @@ class TTFTMeasurer:
         target_ms: float = 800.0,
         window_size: int = 20,
         model: str = "gpt-4o",
+        p95_trigger=None,
+        on_budget_violation=None,
+        on_compression_needed=None,
         **kwargs,
     ):
+        # Warn on explicitly-passed deprecated params (supports positional callers).
+        if p95_trigger is not None or on_budget_violation is not None or on_compression_needed is not None:
+            warnings.warn(
+                "'p95_trigger', 'on_budget_violation', and 'on_compression_needed' "
+                "are deprecated and ignored; configure callbacks on VoiceBudget instead.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+        # Warn on any remaining deprecated kwargs.
         for key in kwargs:
             if key in self._DEPRECATED_PARAMS:
                 warnings.warn(

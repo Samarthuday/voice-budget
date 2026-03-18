@@ -327,6 +327,31 @@ class TestSummariseTailCompressor:
         assert custom in captured_prompts[0]
         assert DEFAULT_SUMMARY_PROMPT not in captured_prompts[0]
 
+    @pytest.mark.asyncio
+    async def test_tail_turns_preserves_last_user_message(self):
+        """Regression: short chats ending with a user turn keep that turn after compression."""
+        async def fake_llm(messages, **kwargs):
+            return "Some summary."
+
+        c = SummariseTailCompressor(llm_fn=fake_llm, tail_turns=100)
+        msgs = [
+            {"role": "system", "content": "You are a helpful voice assistant."},
+            {"role": "user", "content": "First user message."},
+            {"role": "assistant", "content": "Assistant reply."},
+            {"role": "user", "content": "Final user message should be preserved."},
+        ]
+        compressed, _ = await c.async_compress(
+            msgs, target_tokens=100, current_tokens=1000
+        )
+        # The last user message must still be present.
+        assert any(
+            m["role"] == "user" and m["content"] == "Final user message should be preserved."
+            for m in compressed
+        ), "Last user message was dropped by compression"
+        # It should be the last non-summary message (or at least present at end).
+        user_msgs = [m for m in compressed if m["role"] == "user" and "summary" not in m.get("content", "").lower()]
+        assert user_msgs[-1]["content"] == "Final user message should be preserved."
+
 
 class TestEffectiveTarget:
 

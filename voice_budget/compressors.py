@@ -220,15 +220,27 @@ class SummariseTailCompressor(BaseCompressor):
         body = messages[1:] if has_system else messages
 
         # Summarise only the oldest `tail_turns` messages, keep the rest.
+        # Always protect the last user message so the LLM sees the latest query.
         tail_turns = max(0, int(self._tail_turns))
         if tail_turns == 0 or not body:
             return list(messages), 0
-        if len(body) <= tail_turns:
-            to_summarise = body
-            protected_recent = []
+
+        # Find the last user message index so we never summarise it.
+        last_user_idx: Optional[int] = None
+        for idx in range(len(body) - 1, -1, -1):
+            if body[idx].get("role") == "user":
+                last_user_idx = idx
+                break
+
+        if last_user_idx is None:
+            # No user messages — safe to summarise up to tail_turns.
+            split_idx = min(len(body), tail_turns)
         else:
-            to_summarise = body[:tail_turns]
-            protected_recent = body[tail_turns:]
+            # Never include the last user message in the summarised slice.
+            split_idx = min(tail_turns, last_user_idx)
+
+        to_summarise = body[:split_idx]
+        protected_recent = body[split_idx:]
 
         if not to_summarise:
             return list(messages), 0

@@ -120,7 +120,7 @@ class VoiceBudgetProcessor:
                         history = self._measurer.compression_history()
                         last_ev = history[-1] if history else None
                         action = ""
-                        if last_ev and last_ev.turn == self._measurer._turn:
+                        if last_ev and last_ev.turn == self._measurer._turn - 1:
                             action = f" [{last_ev.strategy}]"
                         print(
                             f"[voice-budget/pipecat] "
