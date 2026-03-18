@@ -39,7 +39,9 @@ def compute_effective_target(
         if not p95 or p95 <= 0:
             return effective_target
         ratio = target_ms / p95
-        effective_target = max(int(current_tokens * ratio), 4)
+        scaled = max(int(current_tokens * ratio), 4)
+        # Never exceed the static budget or the current token count.
+        effective_target = min(scaled, target_tokens, current_tokens)
     return effective_target
 
 
@@ -210,7 +212,7 @@ class VoiceBudget:
         # TTFT at first yielded chunk rather than at iterator creation.
         if isinstance(result, AsyncIterator):
             return self._wrap_streaming(
-                result, current_tokens, compressed, strategy_used
+                result, start, current_tokens, compressed, strategy_used
             )
 
         # Non-streaming: TTFT = total await time (approximation)
@@ -218,12 +220,9 @@ class VoiceBudget:
         self._record_and_check(ttft_ms, current_tokens, compressed, strategy_used)
         return result
 
-    async def _wrap_streaming(self, stream, current_tokens, compressed, strategy_used):
+    async def _wrap_streaming(self, stream, start, current_tokens, compressed, strategy_used):
         """Wrap an async iterator to measure TTFT at first chunk."""
         first = True
-        # Capture start when iteration actually begins, not when the
-        # iterator was created, to avoid counting consumer-side idle time.
-        start = time.perf_counter()
         async for chunk in stream:
             if first:
                 first = False
