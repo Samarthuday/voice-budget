@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "voice-budget"
-version = "0.1.1"
-description = "The only voice agent context manager with a TTFT feedback loop. Compresses, measures, auto-tunes."
+version = "0.2.0"
+description = "voice-budget is a toolkit for building and managing voice agents with a focus on context, compression, and real-time performance."
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.10"
