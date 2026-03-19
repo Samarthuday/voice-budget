@@ -14,7 +14,6 @@ Usage (Pipecat — see pipecat_integration.py for full example):
 """
 
 import time
-import warnings
 from collections.abc import AsyncIterator
 from typing import Any, Callable, Dict, List, Optional
 
@@ -69,7 +68,6 @@ class VoiceBudget:
         on_compression: Optional[Callable] = None,
         on_budget_violation: Optional[Callable] = None,
         verbose: bool = False,
-        accuracy_fn: Optional[Callable] = None,
     ):
         """
         Args:
@@ -83,20 +81,11 @@ class VoiceBudget:
             on_compression:    Callback(CompressionEvent) after each compression.
             on_budget_violation: Callback(BudgetStats) when P95 > target_ms.
             verbose:           Print compression decisions to stdout.
-            accuracy_fn:       DEPRECATED. Ignored. Will be removed in a future release.
         """
         self._llm_fn = llm_fn
         self._verbose = verbose
         self._on_compression = on_compression
         self._on_budget_violation = on_budget_violation
-
-        if accuracy_fn is not None:
-            warnings.warn(
-                "VoiceBudget(accuracy_fn=...) is deprecated and ignored. "
-                "It will be removed in a future release.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
 
         self._measurer = TTFTMeasurer(
             target_ms=target_ms,
