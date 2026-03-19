@@ -9,7 +9,7 @@ from .compressors import (
     DEFAULT_SUMMARY_PROMPT,
 )
 
-__version__ = "0.2.0"
+__version__ = "0.2.1"
 __all__ = [
     "wrap",
     "VoiceBudget",
