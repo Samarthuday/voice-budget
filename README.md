@@ -162,3 +162,44 @@ Issues and PRs welcome. See [CONTRIBUTING.md](CONTRIBUTING.md).
 ## License
 
 MIT
+
+## Releases
+
+When you publish a new release make sure to follow these steps so CI can build and publish to PyPI automatically:
+
+1. Bump the version in two places:
+   - `pyproject.toml` (the `version` field)
+   - `voice_budget/__init__.py` (the `__version__` string)
+
+2. Run the test and lint suite locally:
+
+```bash
+# Run unit tests
+pytest tests/ -v
+
+# Optional: run ruff if installed
+ruff check voice_budget/
+```
+
+3. Commit the version bump and push to the remote repository:
+
+```bash
+git add pyproject.toml voice_budget/__init__.py
+git commit -m "chore(release): bump version x.y.z"
+git push origin HEAD
+```
+
+4. Create a git tag and push it (GitHub Actions will publish on tags that start with `v`):
+
+```bash
+# Create an annotated tag
+git tag -a vX.Y.Z -m "Release vX.Y.Z"
+# Push the tag
+git push origin vX.Y.Z
+```
+
+5. CI (GitHub Actions) will run tests/lint and, on tag pushes, build and publish to PyPI using the `PYPI_API_TOKEN` secret. Make sure the repository has this secret configured in Settings → Secrets → Actions as `PYPI_API_TOKEN` before pushing tags.
+
+Notes:
+- Use semantic versioning (MAJOR.MINOR.PATCH) for tags (for example `v0.2.1`).
+- If a tag already exists and you truly need to move it, coordinate with maintainers: force-updating tags that are already published to PyPI is discouraged.

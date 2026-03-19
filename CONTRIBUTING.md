@@ -40,12 +40,51 @@ Create `voice_budget/{framework}_integration.py` following the pattern in
 
 ## Publishing a new version
 
+Follow these steps to publish a release which will trigger CI to publish the package to PyPI:
+
+1. Update versions
+
+- Update `pyproject.toml`'s `version` field to the new version (MAJOR.MINOR.PATCH).
+- Update `voice_budget/__init__.py` `__version__` to the same new version.
+
+2. Run tests and lint locally
+
 ```bash
-# Update version in voice_budget/__init__.py and pyproject.toml
-git tag v0.2.0
-git push origin v0.2.0
-# GitHub Actions will publish to PyPI automatically
+pip install -e ".[dev]"
+pytest tests/ -v
+ruff check voice_budget/ || true
 ```
+
+3. Commit and push
+
+```bash
+git add pyproject.toml voice_budget/__init__.py
+git commit -m "chore(release): bump version X.Y.Z"
+git push origin HEAD
+```
+
+4. Create an annotated tag and push it
+
+```bash
+# Annotated tag recommended
+git tag -a vX.Y.Z -m "Release vX.Y.Z"
+# Push tag to origin
+git push origin vX.Y.Z
+```
+
+5. Ensure GitHub has the `PYPI_API_TOKEN` set in repository Settings → Secrets → Actions. The CI will publish the package automatically when it sees a tag pushed that starts with `v`.
+
+Notes & troubleshooting
+
+- PyPI does not allow re-uploading the same version. If `vX.Y.Z` is already published, bump the patch version (e.g., `vX.Y.Z+1`).
+- If you need to move an existing tag (not recommended), coordinate with maintainers and force-push carefully:
+
+```bash
+git tag -f vX.Y.Z
+git push -f origin vX.Y.Z
+```
+
+- For non-interactive publish from CI, ensure the `PYPI_API_TOKEN` secret is available and the workflow uses it as `secrets.PYPI_API_TOKEN`.
 
 ## Code style
 
