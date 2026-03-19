@@ -1,24 +1,12 @@
-"""
-voice_budget/wrapper.py
-
-The public API. One function call wraps any async LLM.
-
-Usage (framework-agnostic):
-    from voice_budget import wrap
-
-    managed_llm = wrap(your_async_llm_fn, target_ms=800)
-    # then use managed_llm exactly like your_async_llm_fn
-
-Usage (Pipecat — see pipecat_integration.py for full example):
-    from voice_budget.pipecat import VoiceBudgetProcessor
-"""
-
 import time
+import logging
 from collections.abc import AsyncIterator
 from typing import Any, Callable, Dict, List, Optional
 
 from .compressors import BudgetCompressor
 from .core import TTFTMeasurer
+
+logger = logging.getLogger(__name__)
 
 
 def compute_effective_target(
@@ -45,16 +33,7 @@ def compute_effective_target(
 
 
 class VoiceBudget:
-    """
-    Wraps any async LLM callable with a latency feedback loop.
-
-    The wrapped function has the same signature as the original:
-        async fn(messages: List[Dict], **kwargs) -> str  (non-streaming)
-        async fn(messages: List[Dict], **kwargs) -> AsyncIterator[str]  (streaming)
-
-    voice-budget intercepts the call, measures TTFT, compresses context
-    when P95 TTFT exceeds target_ms, and measures whether it helped.
-    """
+    """Wrap any async LLM callable with a latency feedback loop."""
 
     def __init__(
         self,
@@ -103,8 +82,6 @@ class VoiceBudget:
         self._last_good_messages: Optional[List[Dict]] = None
         self._restore_next_turn: bool = False
 
-    # ── Main call ─────────────────────────────────────────────────────────────
-
     async def __call__(
         self,
         messages: List[Dict],
@@ -114,12 +91,11 @@ class VoiceBudget:
         Drop-in replacement for your LLM function.
         Transparently measures, compresses, and feeds back.
         """
-        # Rollback: if last compression hurt, restore full context and skip
-        # compression this turn so the restored context is actually used.
+    # Rollback: if last compression hurt, restore full context and skip compression this turn.
         restored_context = False
         if self._restore_next_turn and self._last_good_messages is not None:
             if self._verbose:
-                print("[voice-budget] Restoring full context after harmful compression.")
+                logger.info("[voice-budget] Restoring full context after harmful compression.")
             messages = self._last_good_messages
             self._last_good_messages = None
             restored_context = True
@@ -130,11 +106,11 @@ class VoiceBudget:
         compressed = False
         strategy_used = None
 
-        # ── Step 1: Check if we need to compress ──────────────────────────────
+    # Step 1: Check if we need to compress
         if (not restored_context) and self._measurer.should_compress():
             stats = self._measurer.stats()
             if self._verbose:
-                print(
+                logger.info(
                     f"[voice-budget] P95={stats.p95_ms:.0f}ms > target={self._measurer.target_ms}ms "
                     f"at turn {self._measurer._turn} ({current_tokens} tokens). Compressing..."
                 )
@@ -149,7 +125,7 @@ class VoiceBudget:
             self._last_good_messages = list(messages)
             ttft_before = stats.p95_ms if stats else 0.0
 
-            # ── Step 2: Compress ───────────────────────────────────────────────
+            # Step 2: Compress
             effective_target = compute_effective_target(
                 current_tokens=current_tokens,
                 stats=stats,
@@ -166,7 +142,7 @@ class VoiceBudget:
             tokens_after = self._measurer.count_tokens(compressed_msgs)
 
             if self._verbose:
-                print(
+                logger.info(
                     f"[voice-budget] Strategy={strategy_used} "
                     f"tokens: {current_tokens}→{tokens_after} "
                     f"(saved {tokens_removed})"
@@ -193,18 +169,17 @@ class VoiceBudget:
             # No compression needed — clear stale rollback snapshot
             self._last_good_messages = None
 
-        # ── Step 3: Call LLM, measure TTFT ────────────────────────────────────
+    # Step 3: Call LLM, measure TTFT
         start = time.perf_counter()
         result = await self._llm_fn(messages, **kwargs)
 
-        # Streaming: if result is an AsyncIterator, wrap it so we measure
-        # TTFT at first yielded chunk rather than at iterator creation.
+    # Streaming: if result is an AsyncIterator, wrap it so we measure TTFT at first yielded chunk.
         if isinstance(result, AsyncIterator):
             return self._wrap_streaming(
                 result, start, current_tokens, compressed, strategy_used
             )
 
-        # Non-streaming: TTFT = total await time (approximation)
+    # Non-streaming: TTFT = total await time (approximation)
         ttft_ms = (time.perf_counter() - start) * 1000
         self._record_and_check(ttft_ms, current_tokens, compressed, strategy_used)
         return result
@@ -218,7 +193,7 @@ class VoiceBudget:
                 ttft_ms = (time.perf_counter() - start) * 1000
                 self._record_and_check(ttft_ms, current_tokens, compressed, strategy_used)
             yield chunk
-        # Edge case: empty stream
+    # Edge case: empty stream
         if first:
             ttft_ms = (time.perf_counter() - start) * 1000
             self._record_and_check(ttft_ms, current_tokens, compressed, strategy_used)
@@ -238,7 +213,7 @@ class VoiceBudget:
             if last_ev and last_ev.rolled_back and self._last_good_messages is not None:
                 self._restore_next_turn = True
                 if self._verbose:
-                    print(
+                    logger.warning(
                         f"[voice-budget] Compression hurt latency "
                         f"(delta={last_ev.delta_ms:.0f}ms). "
                         f"Will restore full context next turn."
@@ -247,14 +222,14 @@ class VoiceBudget:
         if self._verbose and self._measurer._turn % 5 == 0:
             s = self._measurer.stats()
             if s:
-                print(
+                logger.info(
                     f"[voice-budget] Turn {s.turn} | "
                     f"P50={s.p50_ms:.0f}ms P95={s.p95_ms:.0f}ms "
                     f"tokens={s.token_count} jitter={s.jitter_ms:.0f}ms"
                 )
 
 
-    # ── Public stats API ───────────────────────────────────────────────────────
+    # Public stats API 
 
     def stats(self):
         """Current rolling P50/P95/P99/jitter statistics."""
@@ -272,28 +247,28 @@ class VoiceBudget:
         """Print a human-readable report to stdout."""
         r = self.report()
         s = self.stats()
-        print("\n" + "=" * 60)
-        print("voice-budget Report")
-        print("=" * 60)
-        print(f"  Total turns:          {r['total_turns']}")
+        logger.info("\n" + "=" * 60)
+        logger.info("voice-budget Report")
+        logger.info("=" * 60)
+        logger.info(f"  Total turns:          {r['total_turns']}")
         if s:
-            print(f"  Current P50 TTFT:     {s.p50_ms:.0f}ms")
-            print(f"  Current P95 TTFT:     {s.p95_ms:.0f}ms")
-            print(f"  Target:               {r['target_ms']}ms")
-            print(f"  Budget met:           {'✓' if r['budget_met'] else '✗'}")
-            print(f"  Jitter (std):         {s.jitter_ms:.0f}ms")
-        print(f"  Compressions:         {r['compression_events']}")
-        print(f"  Helpful:              {r['helpful_compressions']}")
-        print(f"  Harmful (rolled back):{r['harmful_compressions']}")
+            logger.info(f"  Current P50 TTFT:     {s.p50_ms:.0f}ms")
+            logger.info(f"  Current P95 TTFT:     {s.p95_ms:.0f}ms")
+            logger.info(f"  Target:               {r['target_ms']}ms")
+            logger.info(f"  Budget met:           {'✓' if r['budget_met'] else '✗'}")
+            logger.info(f"  Jitter (std):         {s.jitter_ms:.0f}ms")
+        logger.info(f"  Compressions:         {r['compression_events']}")
+        logger.info(f"  Helpful:              {r['helpful_compressions']}")
+        logger.info(f"  Harmful (rolled back):{r['harmful_compressions']}")
         if r['helpful_compressions'] > 0:
-            print(f"  Avg improvement:      {r['avg_ttft_improvement_ms']:.0f}ms")
-        print(f"  Total tokens saved:   {r['total_tokens_saved']:,}")
+            logger.info(f"  Avg improvement:      {r['avg_ttft_improvement_ms']:.0f}ms")
+        logger.info(f"  Total tokens saved:   {r['total_tokens_saved']:,}")
         if r['strategies_used']:
-            print(f"  Strategies used:      {', '.join(r['strategies_used'])}")
-        print("=" * 60 + "\n")
+            logger.info(f"  Strategies used:      {', '.join(r['strategies_used'])}")
+        logger.info("=" * 60 + "\n")
 
 
-# ── Convenience function ───────────────────────────────────────────────────────
+# Convenience function
 
 def wrap(
     llm_fn: Callable,

@@ -1,18 +1,8 @@
 #!/usr/bin/env python3
-"""
-voice_budget/cli.py
-
-CLI entry point. Installed as `voice-budget` command via pyproject.toml.
-
-Commands:
-  voice-budget demo          Run a simulated pipeline demo showing TTFT decay + recovery
-  voice-budget benchmark     Benchmark your LLM endpoint and print latency stats
-  voice-budget version       Print version
-"""
-
 import argparse
 import asyncio
 import json
+import os
 import random
 import sys
 import time
@@ -113,6 +103,14 @@ async def _run_demo(turns: int, target_ms: int, verbose: bool):
 
 async def _run_benchmark(endpoint: str, model: str, turns: int, target_ms: int):
     """Benchmark a real OpenAI-compatible endpoint."""
+    # Require an OPENAI_API_KEY environment variable for the benchmark runner.
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        print("Error: Set OPENAI_API_KEY environment variable first.")
+        print("  Windows:  set OPENAI_API_KEY=sk-...")
+        print("  Linux:    export OPENAI_API_KEY=sk-...")
+        sys.exit(1)
+
     try:
         from openai import AsyncOpenAI
     except ImportError:
@@ -121,7 +119,7 @@ async def _run_benchmark(endpoint: str, model: str, turns: int, target_ms: int):
 
     from voice_budget import wrap
 
-    client = AsyncOpenAI(base_url=endpoint if endpoint != "openai" else None)
+    client = AsyncOpenAI(api_key=api_key, base_url=endpoint if endpoint != "openai" else None)
 
     async def llm_fn(messages, **kwargs):
         resp = await client.chat.completions.create(

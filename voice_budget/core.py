@@ -1,12 +1,3 @@
-"""
-voice_budget/core.py
-
-The core measurement engine. Framework-agnostic.
-Measures actual TTFT per turn, maintains rolling statistics,
-detects when context growth is causing latency to climb,
-and triggers the compression feedback loop.
-"""
-
 import warnings
 from collections import deque
 from dataclasses import dataclass
@@ -15,11 +6,11 @@ from typing import Any, Deque, Dict, List, Optional
 import numpy as np
 import tiktoken
 
-
-# ── Data structures ───────────────────────────────────────────────────────────
+"""Core TTFT measurement types and engine."""
 
 @dataclass
 class TTFTSample:
+    """Single TTFT measurement for a conversation turn."""
     turn: int
     ttft_ms: float
     token_count: int
@@ -29,6 +20,7 @@ class TTFTSample:
 
 @dataclass
 class CompressionEvent:
+    """Represents a compression decision and before/after metrics."""
     turn: int
     strategy: str
     tokens_before: int
@@ -41,6 +33,7 @@ class CompressionEvent:
 
 @dataclass
 class BudgetStats:
+    """Aggregated rolling statistics for recent TTFT samples."""
     p50_ms: float
     p95_ms: float
     p99_ms: float
@@ -53,14 +46,8 @@ class BudgetStats:
     total_tokens_saved: int
 
 
-# ── Main engine ───────────────────────────────────────────────────────────────
-
 class TTFTMeasurer:
-    """
-    Wraps any async LLM call. Measures actual wall-clock TTFT
-    (time from call start to first token received).
-    Framework-agnostic — works with Pipecat, LiveKit, raw asyncio.
-    """
+    """Wraps any async LLM call. Measures wall-clock TTFT (time from call start to first token received)."""
 
     _DEPRECATED_PARAMS = frozenset({"p95_trigger", "on_budget_violation", "on_compression_needed"})
 
@@ -82,6 +69,7 @@ class TTFTMeasurer:
                 DeprecationWarning,
                 stacklevel=2,
             )
+
         # Warn on any remaining deprecated kwargs.
         for key in kwargs:
             if key in self._DEPRECATED_PARAMS:
@@ -93,6 +81,7 @@ class TTFTMeasurer:
                 )
             else:
                 raise TypeError(f"Unexpected keyword argument {key!r}")
+
         self.target_ms = target_ms
         self.window_size = window_size
         self.model = model
@@ -109,7 +98,6 @@ class TTFTMeasurer:
             self._enc = tiktoken.get_encoding("cl100k_base")
 
     def count_tokens(self, messages: List[Dict]) -> int:
-        """Count tokens in a messages list (OpenAI format)."""
         total = 0
         for msg in messages:
             content = msg.get("content", "")
@@ -119,8 +107,7 @@ class TTFTMeasurer:
                 for part in content:
                     if isinstance(part, dict) and part.get("type") == "text":
                         total += len(self._enc.encode(part.get("text", "")))
-            # 4 tokens overhead per message (OpenAI spec)
-            total += 4
+            total += 4  # 4 tokens overhead per message (OpenAI spec)
         total += 2  # reply priming
         return total
 

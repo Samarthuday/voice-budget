@@ -1,4 +1,3 @@
-"""voice_budget/__init__.py"""
 from .wrapper import VoiceBudget, wrap
 from .core import TTFTMeasurer, BudgetStats, TTFTSample, CompressionEvent
 from .compressors import (
@@ -9,7 +8,7 @@ from .compressors import (
     DEFAULT_SUMMARY_PROMPT,
 )
 
-__version__ = "0.2.3"
+__version__ = "0.2.4"
 __all__ = [
     "wrap",
     "VoiceBudget",

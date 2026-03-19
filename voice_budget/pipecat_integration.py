@@ -1,34 +1,5 @@
-"""
-voice_budget/pipecat_integration.py
-
-Native Pipecat integration.
-Inserts voice-budget as a FrameProcessor in your Pipecat pipeline.
-
-Usage:
-    from pipecat.pipeline.pipeline import Pipeline
-    from pipecat.services.openai import OpenAILLMService
-    from voice_budget.pipecat_integration import VoiceBudgetProcessor
-
-    llm = OpenAILLMService(api_key=..., model="gpt-4o")
-    budget = VoiceBudgetProcessor(target_ms=800, verbose=True)
-
-    pipeline = Pipeline([
-        transport.input(),
-        stt,
-        context_aggregator.user(),
-        budget,          # <-- insert here, before LLM
-        llm,
-        tts,
-        transport.output(),
-        context_aggregator.assistant(),
-    ])
-
-VoiceBudgetProcessor sits between the context aggregator and the LLM.
-It intercepts LLMMessagesAppendFrame, checks if compression is needed,
-modifies the context in-place, then passes the frame downstream.
-"""
-
 import time
+import logging
 from typing import Optional
 
 from .compressors import BudgetCompressor
@@ -36,15 +7,11 @@ from .core import TTFTMeasurer
 from .wrapper import compute_effective_target
 
 
-class VoiceBudgetProcessor:
-    """
-    Pipecat FrameProcessor that wraps context management.
-    Compatible with Pipecat's LLMContext and frame-based pipeline.
+logger = logging.getLogger(__name__)
 
-    Implements pipecat.processors.frame_processor.FrameProcessor interface.
-    Import pipecat types dynamically to keep voice-budget dependency-free
-    from pipecat (pipecat is optional).
-    """
+
+class VoiceBudgetProcessor:
+    """Pipecat FrameProcessor that wraps context management."""
 
     def __init__(
         self,
@@ -75,7 +42,7 @@ class VoiceBudgetProcessor:
         )
         self._turn_start: Optional[float] = None
 
-    # ── Pipecat FrameProcessor interface ──────────────────────────────────────
+    
 
     async def process_frame(self, frame, direction):
         """
@@ -93,21 +60,21 @@ class VoiceBudgetProcessor:
             return
 
         if isinstance(frame, (LLMMessagesAppendFrame, LLMMessagesUpdateFrame)):
-            # This is where context is about to be sent to the LLM
+            
             messages = getattr(frame, "messages", None)
             if messages is not None:
                 messages = await self._maybe_compress(messages)
-                # Mutate in-place — Pipecat reads from the frame object
+                
                 if hasattr(frame, "messages"):
                     frame.messages = messages
 
             self._turn_start = time.perf_counter()
 
         elif isinstance(frame, LLMTextFrame):
-            # First token received — this is TTFT
+            
             if self._turn_start is not None:
                 ttft_ms = (time.perf_counter() - self._turn_start) * 1000
-                # Get token count from last messages (approximate)
+                
                 self._measurer.record_sample(
                     ttft_ms=ttft_ms,
                     token_count=getattr(self, "_last_token_count", 0),
@@ -122,7 +89,7 @@ class VoiceBudgetProcessor:
                         action = ""
                         if last_ev and last_ev.turn == self._measurer._turn - 1:
                             action = f" [{last_ev.strategy}]"
-                        print(
+                        logger.info(
                             f"[voice-budget/pipecat] "
                             f"Turn {s.turn} P50={s.p50_ms:.0f}ms "
                             f"P95={s.p95_ms:.0f}ms tokens={s.token_count}"
@@ -141,7 +108,7 @@ class VoiceBudgetProcessor:
 
         s = self._measurer.stats()
         if self._verbose:
-            print(
+            logger.info(
                 f"[voice-budget/pipecat] P95={s.p95_ms:.0f}ms > "
                 f"{self._target_ms}ms. Compressing {current_tokens} tokens..."
             )
@@ -183,7 +150,7 @@ class VoiceBudgetProcessor:
                 pass
 
         if self._verbose:
-            print(
+            logger.info(
                 f"[voice-budget/pipecat] {strategy}: "
                 f"{current_tokens}→{tokens_after} tokens (saved {removed})"
             )

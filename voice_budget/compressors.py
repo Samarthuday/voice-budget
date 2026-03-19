@@ -1,14 +1,3 @@
-"""
-voice_budget/compressors.py
-
-Three compression strategies in escalating cost order:
-  1. SlidingWindow   — zero cost, always works, lowest quality
-  2. SemanticTrim    — cheap (embeddings), good quality, no LLM call
-  3. SummariseTail   — one LLM call, best quality, highest cost
-
-The BudgetCompressor tries them in order and measures TTFT after each.
-"""
-
 from abc import ABC, abstractmethod
 from typing import Callable, Dict, List, Optional, Tuple
 
@@ -20,7 +9,7 @@ DEFAULT_SUMMARY_PROMPT = (
 )
 
 
-# ── Base ──────────────────────────────────────────────────────────────────────
+# Base
 
 class BaseCompressor(ABC):
     name: str = "base"
@@ -37,9 +26,6 @@ class BaseCompressor(ABC):
         Never removes the system message (index 0 if role==system).
         Never removes the last user message.
         """
-
-
-# ── Strategy 1: Sliding window ────────────────────────────────────────────────
 
 class SlidingWindowCompressor(BaseCompressor):
     """
@@ -75,9 +61,6 @@ class SlidingWindowCompressor(BaseCompressor):
             tokens_removed += removed_tokens
 
         return result, tokens_removed
-
-
-# ── Strategy 2: Semantic trim ─────────────────────────────────────────────────
 
 class SemanticTrimCompressor(BaseCompressor):
     """
@@ -172,8 +155,6 @@ class SemanticTrimCompressor(BaseCompressor):
             final = system_msgs + result
         return final, tokens_removed
 
-
-# ── Strategy 3: Summarise tail ────────────────────────────────────────────────
 
 class SummariseTailCompressor(BaseCompressor):
     """
@@ -273,9 +254,6 @@ class SummariseTailCompressor(BaseCompressor):
 
         compressed = system_msgs + [summary_msg] + list(protected_recent)
         return compressed, tokens_removed
-
-
-# ── Orchestrator ──────────────────────────────────────────────────────────────
 
 class BudgetCompressor:
     """
