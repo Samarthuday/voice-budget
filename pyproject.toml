@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "voice-budget"
-version = "0.2.2"
+version = "0.2.3"
 description = "voice-budget is a toolkit for building and managing voice agents with a focus on context, compression, and real-time performance."
 readme = "README.md"
 license = { text = "MIT" }
@@ -43,10 +43,10 @@ dev = [
 voice-budget = "voice_budget.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/Samarthre/voice-budget"
-Repository = "https://github.com/Samarthre/voice-budget"
-Documentation = "https://github.com/Samarthre/voice-budget#readme"
-Issues = "https://github.com/Samarthre/voice-budget/issues"
+Homepage = "https://github.com/Samarthuday/voice-budget"
+Repository = "https://github.com/Samarthuday/voice-budget"
+Documentation = "https://github.com/Samarthuday/voice-budget#readme"
+Issues = "https://github.com/Samarthuday/voice-budget/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["voice_budget"]
