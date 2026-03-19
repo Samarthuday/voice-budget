@@ -57,6 +57,8 @@ asyncio.run(voice_loop())
 
 ### Pipecat
 
+> **Note for Pipecat Users**: The provided `VoiceBudgetProcessor` in `pipecat_integration.py` is a blueprint. In order to properly integrate it with a full Pipecat pipeline, you will need to ensure it correctly inherits from `pipecat.processors.frame_processor.FrameProcessor` and wires up the `push_frame` and `process_frame` methods to pass frames down the pipeline.
+
 ```python
 from pipecat.pipeline.pipeline import Pipeline
 from voice_budget.pipecat_integration import VoiceBudgetProcessor
