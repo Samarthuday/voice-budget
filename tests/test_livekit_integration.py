@@ -1,6 +1,7 @@
 import asyncio
 import pytest
 
+import voice_budget.livekit_integration as livekit_integration
 from voice_budget.livekit_integration import VoiceBudgetAgent
 
 
@@ -15,7 +16,7 @@ def sample_messages():
 
 
 @pytest.fixture
-async def budget_agent():
+def budget_agent():
     """Create a VoiceBudgetAgent instance."""
     return VoiceBudgetAgent(
         target_ms=800,
@@ -50,6 +51,94 @@ async def test_agent_process_messages(budget_agent, sample_messages):
         llm_fn=mock_llm,
     )
     assert response == "Mock response."
+
+
+@pytest.mark.asyncio
+async def test_agent_process_messages_forwards_kwargs(budget_agent, sample_messages):
+    """Test process_messages forwards keyword args to the LLM callable."""
+    captured = {}
+
+    async def mock_llm(messages, **kwargs):
+        captured["messages"] = messages
+        captured["kwargs"] = kwargs
+        return "Mock response."
+
+    response = await budget_agent.process_messages(
+        messages=sample_messages,
+        llm_fn=mock_llm,
+        temperature=0.3,
+        max_tokens=64,
+    )
+
+    assert response == "Mock response."
+    assert captured["messages"] == sample_messages
+    assert captured["kwargs"] == {"temperature": 0.3, "max_tokens": 64}
+
+
+@pytest.mark.asyncio
+async def test_agent_ttft_starts_after_compression(monkeypatch, sample_messages):
+    """Compression work should not count toward the recorded LLM TTFT."""
+    agent = VoiceBudgetAgent(use_semantic=False, verbose=False)
+    clock = {"now": 0.0}
+
+    def fake_perf_counter():
+        return clock["now"]
+
+    async def fake_maybe_compress(messages):
+        clock["now"] += 0.12
+        agent._last_token_count = 123
+        return messages
+
+    async def mock_llm(messages, **kwargs):
+        clock["now"] += 0.02
+        return "Response."
+
+    monkeypatch.setattr(livekit_integration.time, "perf_counter", fake_perf_counter)
+    monkeypatch.setattr(agent, "_maybe_compress", fake_maybe_compress)
+
+    response = await agent.process_messages(
+        messages=sample_messages,
+        llm_fn=mock_llm,
+    )
+
+    assert response == "Response."
+    assert agent._measurer._samples[-1].ttft_ms == pytest.approx(20.0)
+    assert agent._measurer._samples[-1].token_count == 123
+
+
+@pytest.mark.asyncio
+async def test_agent_streaming_ttft_records_first_chunk(monkeypatch, sample_messages):
+    """Streaming responses should measure TTFT at the first yielded chunk."""
+    agent = VoiceBudgetAgent(use_semantic=False, verbose=False)
+    clock = {"now": 0.0}
+
+    def fake_perf_counter():
+        return clock["now"]
+
+    async def streaming_llm(messages, **kwargs):
+        clock["now"] += 0.05
+
+        async def _gen():
+            clock["now"] += 0.03
+            yield "Hello"
+            clock["now"] += 0.01
+            yield " world"
+
+        return _gen()
+
+    monkeypatch.setattr(livekit_integration.time, "perf_counter", fake_perf_counter)
+
+    result = await agent.process_messages(
+        messages=sample_messages,
+        llm_fn=streaming_llm,
+    )
+
+    chunks = []
+    async for chunk in result:
+        chunks.append(chunk)
+
+    assert chunks == ["Hello", " world"]
+    assert agent._measurer._samples[-1].ttft_ms == pytest.approx(80.0)
 
 
 @pytest.mark.asyncio

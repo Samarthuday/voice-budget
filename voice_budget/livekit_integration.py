@@ -1,6 +1,7 @@
-import time
 import logging
-from typing import Optional, List, Dict
+import time
+from collections.abc import AsyncIterator
+from typing import Any, Dict, List, Optional
 
 from .compressors import BudgetCompressor
 from .core import TTFTMeasurer
@@ -26,6 +27,8 @@ class VoiceBudgetAgent:
         verbose: bool = False,
         on_compression=None,
         on_budget_violation=None,
+        semantic_threshold: int = 1500,
+        summarise_threshold: int = 4000,
     ):
         """Initialize LiveKit voice budget agent.
         
@@ -38,6 +41,8 @@ class VoiceBudgetAgent:
             verbose: Log compression events.
             on_compression: Callback(CompressionEvent) after compression.
             on_budget_violation: Callback(BudgetStats) when TTFT exceeds budget.
+            semantic_threshold: Use SemanticTrim when current_tokens > this value (default 1500).
+            summarise_threshold: Use SummariseTail when current_tokens > this value (default 4000).
         """
         self._target_ms = target_ms
         self._token_budget = token_budget
@@ -54,6 +59,8 @@ class VoiceBudgetAgent:
             target_tokens=token_budget,
             use_semantic=use_semantic,
             use_summarise=False,
+            semantic_threshold=semantic_threshold,
+            summarise_threshold=summarise_threshold,
         )
         self._turn_start: Optional[float] = None
         self._last_token_count: int = 0
@@ -62,7 +69,8 @@ class VoiceBudgetAgent:
         self,
         messages: List[Dict],
         llm_fn,
-    ) -> str:
+        **kwargs,
+    ) -> Any:
         """Process conversation messages, measure TTFT, and compress if needed.
         
         This is the main entry point for LiveKit agent integration.
@@ -70,25 +78,35 @@ class VoiceBudgetAgent:
         
         Args:
             messages: Conversation history (list of dicts with role/content).
-            llm_fn: Async LLM callable that takes messages and returns response.
+            llm_fn: Async LLM callable that takes messages and returns a response.
+            **kwargs: Additional keyword args forwarded to llm_fn.
             
         Returns:
-            LLM response text.
+            The LLM response, or a wrapped async stream that records TTFT on
+            its first yielded chunk.
         """
-        # Record turn start time
-        self._turn_start = time.perf_counter()
-
         # Check if compression is needed and apply
         messages = await self._maybe_compress(messages)
 
+        # Record turn start time after compression so TTFT reflects LLM latency.
+        self._turn_start = time.perf_counter()
+
         # Call LLM and measure TTFT
         try:
-            response = await llm_fn(messages)
+            response = await llm_fn(messages, **kwargs)
         except Exception as e:
+            self._turn_start = None
             logger.error(f"[voice-budget/livekit] LLM call failed: {e}")
             raise
 
-        # Record TTFT sample
+        if isinstance(response, AsyncIterator):
+            return self._wrap_streaming_response(response)
+
+        self._record_ttft_sample()
+        return response
+
+    def _record_ttft_sample(self) -> None:
+        """Record a single TTFT sample for the active turn."""
         if self._turn_start is not None:
             ttft_ms = (time.perf_counter() - self._turn_start) * 1000
             self._measurer.record_sample(
@@ -112,7 +130,22 @@ class VoiceBudgetAgent:
                         f"compressions={len(history)}{action}"
                     )
 
-        return response
+    async def _wrap_streaming_response(self, stream: AsyncIterator[Any]) -> AsyncIterator[Any]:
+        """Wrap a streaming response so TTFT is recorded on first chunk."""
+        first = True
+        try:
+            async for chunk in stream:
+                if first:
+                    first = False
+                    self._record_ttft_sample()
+                yield chunk
+        except Exception:
+            if first:
+                self._turn_start = None
+            raise
+
+        if first:
+            self._record_ttft_sample()
 
     async def _maybe_compress(self, messages: List[Dict]) -> List[Dict]:
         """Check if compression is needed and apply it."""
