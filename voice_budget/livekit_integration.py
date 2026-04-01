@@ -28,7 +28,6 @@ class VoiceBudgetAgent:
         on_compression=None,
         on_budget_violation=None,
         semantic_threshold: int = 1500,
-        summarise_threshold: int = 4000,
     ):
         """Initialize LiveKit voice budget agent.
         
@@ -41,8 +40,7 @@ class VoiceBudgetAgent:
             verbose: Log compression events.
             on_compression: Callback(CompressionEvent) after compression.
             on_budget_violation: Callback(BudgetStats) when TTFT exceeds budget.
-            semantic_threshold: Use SemanticTrim when current_tokens > this value (default 1500).
-            summarise_threshold: Use SummariseTail when current_tokens > this value (default 4000).
+            semantic_threshold: Use SemanticTrim when current_tokens >= this value (default 1500).
         """
         self._target_ms = target_ms
         self._token_budget = token_budget
@@ -60,7 +58,6 @@ class VoiceBudgetAgent:
             use_semantic=use_semantic,
             use_summarise=False,
             semantic_threshold=semantic_threshold,
-            summarise_threshold=summarise_threshold,
         )
         self._turn_start: Optional[float] = None
         self._last_token_count: int = 0

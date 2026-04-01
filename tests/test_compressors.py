@@ -83,6 +83,23 @@ def test_budget_compressor_strategy_selection_at_summarise_threshold():
     ]
 
 
+def test_budget_compressor_rejects_non_positive_semantic_threshold():
+    with pytest.raises(ValueError, match="semantic_threshold must be > 0"):
+        BudgetCompressor(semantic_threshold=0)
+
+
+def test_budget_compressor_rejects_non_positive_summarise_threshold():
+    with pytest.raises(ValueError, match="summarise_threshold must be > 0"):
+        BudgetCompressor(summarise_threshold=0)
+
+
+def test_budget_compressor_rejects_inverted_thresholds():
+    with pytest.raises(
+        ValueError, match="summarise_threshold must be >= semantic_threshold"
+    ):
+        BudgetCompressor(semantic_threshold=4000, summarise_threshold=1500)
+
+
 @pytest.mark.asyncio
 async def test_budget_compressor_fallback_prefers_lowest_resulting_token_count(monkeypatch):
     class FakeStrategy:

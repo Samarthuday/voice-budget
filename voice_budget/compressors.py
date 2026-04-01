@@ -278,6 +278,15 @@ class BudgetCompressor:
         semantic_threshold: int = 1500,  # Use SemanticTrim when tokens >= this
         summarise_threshold: int = 4000,  # Use SummariseTail when tokens >= this
     ):
+        if semantic_threshold <= 0:
+            raise ValueError("semantic_threshold must be > 0")
+        if summarise_threshold <= 0:
+            raise ValueError("summarise_threshold must be > 0")
+        if summarise_threshold < semantic_threshold:
+            raise ValueError(
+                "summarise_threshold must be >= semantic_threshold"
+            )
+
         self.target_tokens = target_tokens
         self.semantic_threshold = semantic_threshold
         self.summarise_threshold = summarise_threshold
