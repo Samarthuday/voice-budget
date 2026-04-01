@@ -95,8 +95,18 @@ async def on_message(message: str, messages: list):
         messages=messages,
         llm_fn=your_llm_function,
     )
-    messages.append({"role": "assistant", "content": response})
-    return response
+
+    # Streaming LLMs return an async iterator; non-streaming calls return text.
+    if hasattr(response, "__aiter__"):
+        chunks = []
+        async for chunk in response:
+            chunks.append(chunk)
+        response_text = "".join(chunks)
+    else:
+        response_text = response
+
+    messages.append({"role": "assistant", "content": response_text})
+    return response_text
 
 # Access stats and reports
 stats = budget.stats()

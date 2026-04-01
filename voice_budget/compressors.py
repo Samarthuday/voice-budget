@@ -258,9 +258,11 @@ class SummariseTailCompressor(BaseCompressor):
 class BudgetCompressor:
     """
     Selects compression strategies based on token count thresholds:
-    - 0-1500 tokens: SlidingWindow (fast, good enough)
-    - 1500-4000 tokens: SemanticTrim (balances quality & speed)
-    - 4000+ tokens: SummariseTail (best quality for extreme compression)
+    - tokens < semantic_threshold: SlidingWindow (fast, good enough)
+    - semantic_threshold <= tokens < summarise_threshold:
+      SemanticTrim (balances quality & speed)
+    - tokens >= summarise_threshold:
+      SummariseTail (best quality for extreme compression)
     
     Within each tier, tries strategies and returns the first that meets target.
     Thresholds can be customized via init parameters.
@@ -273,8 +275,8 @@ class BudgetCompressor:
         use_semantic: bool = True,
         use_summarise: bool = True,
         # Thresholds for strategy selection based on current token count
-        semantic_threshold: int = 1500,  # Use SemanticTrim when tokens > this
-        summarise_threshold: int = 4000,  # Use SummariseTail when tokens > this
+        semantic_threshold: int = 1500,  # Use SemanticTrim when tokens >= this
+        summarise_threshold: int = 4000,  # Use SummariseTail when tokens >= this
     ):
         self.target_tokens = target_tokens
         self.semantic_threshold = semantic_threshold
@@ -328,7 +330,8 @@ class BudgetCompressor:
         
         Selects strategies based on token count thresholds, then tries them
         in order. Returns the first that meets target.
-        If none meet target, returns the best compression achieved.
+        If none meet target, returns the fallback with the lowest resulting
+        token count (using tokens removed only as a tie-breaker).
 
         effective_target: override target_tokens for this call (e.g. TTFT-proportional).
         """
@@ -340,6 +343,7 @@ class BudgetCompressor:
         best_result = None
         best_strategy_name = None
         best_removed = 0
+        best_new_tokens = current_tokens
         
         for strategy in strategies:
             if isinstance(strategy, SummariseTailCompressor):
@@ -362,11 +366,16 @@ class BudgetCompressor:
             if meets_target:
                 return compressed, strategy.name, removed
             
-            # Track best fallback if no strategy meets target
-            if removed > best_removed:
+            # Track the best fallback by actual resulting token count.
+            if (
+                best_result is None
+                or new_tokens < best_new_tokens
+                or (new_tokens == best_new_tokens and removed > best_removed)
+            ):
                 best_result = compressed
                 best_strategy_name = strategy.name
                 best_removed = removed
+                best_new_tokens = new_tokens
 
         # Ensure we have a result (should always be true)
         if best_result is None:

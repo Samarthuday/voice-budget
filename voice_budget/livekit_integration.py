@@ -94,9 +94,9 @@ class VoiceBudgetAgent:
         # Call LLM and measure TTFT
         try:
             response = await llm_fn(messages, **kwargs)
-        except Exception as e:
+        except Exception:
             self._turn_start = None
-            logger.error(f"[voice-budget/livekit] LLM call failed: {e}")
+            logger.exception("[voice-budget/livekit] LLM call failed")
             raise
 
         if isinstance(response, AsyncIterator):
