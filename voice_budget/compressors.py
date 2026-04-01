@@ -257,9 +257,15 @@ class SummariseTailCompressor(BaseCompressor):
 
 class BudgetCompressor:
     """
-    Tries compression strategies in escalating cost order.
-    Measures whether each strategy actually helped TTFT.
-    Rolls back if compression made things worse.
+    Selects compression strategies based on token count thresholds:
+    - tokens < semantic_threshold: SlidingWindow (fast, good enough)
+    - semantic_threshold <= tokens < summarise_threshold:
+      SemanticTrim (balances quality & speed)
+    - tokens >= summarise_threshold:
+      SummariseTail (best quality for extreme compression)
+    
+    Within each tier, tries strategies and returns the first that meets target.
+    Thresholds can be customized via init parameters.
     """
 
     def __init__(
@@ -268,13 +274,58 @@ class BudgetCompressor:
         llm_fn: Optional[Callable] = None,
         use_semantic: bool = True,
         use_summarise: bool = True,
+        # Thresholds for strategy selection based on current token count
+        semantic_threshold: int = 1500,  # Use SemanticTrim when tokens >= this
+        summarise_threshold: int = 4000,  # Use SummariseTail when tokens >= this
     ):
+        if semantic_threshold <= 0:
+            raise ValueError("semantic_threshold must be > 0")
+        if summarise_threshold <= 0:
+            raise ValueError("summarise_threshold must be > 0")
+        if summarise_threshold < semantic_threshold:
+            raise ValueError(
+                "summarise_threshold must be >= semantic_threshold"
+            )
+
         self.target_tokens = target_tokens
-        self._strategies: List[BaseCompressor] = [SlidingWindowCompressor()]
-        if use_semantic:
-            self._strategies.append(SemanticTrimCompressor())
-        if use_summarise and llm_fn:
-            self._strategies.append(SummariseTailCompressor(llm_fn))
+        self.semantic_threshold = semantic_threshold
+        self.summarise_threshold = summarise_threshold
+        self._llm_fn = llm_fn
+        self._use_semantic = use_semantic
+        self._use_summarise = use_summarise
+        
+        # Build strategy registry (all available strategies)
+        self._sliding_window = SlidingWindowCompressor()
+        self._semantic_trim = SemanticTrimCompressor() if use_semantic else None
+        self._summarise_tail = SummariseTailCompressor(llm_fn) if use_summarise and llm_fn else None
+
+    def _select_strategies(self, current_tokens: int) -> List[BaseCompressor]:
+        """
+        Select which strategies to try based on current token count.
+        Returns strategies in order of preference.
+        
+        Strategy selection logic:
+        - If tokens < semantic_threshold: just SlidingWindow
+        - If semantic_threshold <= tokens < summarise_threshold: SemanticTrim → SlidingWindow
+        - If tokens >= summarise_threshold: SummariseTail → SemanticTrim → SlidingWindow
+        """
+        strategies = []
+        
+        if current_tokens >= self.summarise_threshold and self._summarise_tail:
+            # Extreme compression: try SummariseTail first (best quality)
+            strategies.append(self._summarise_tail)
+            if self._semantic_trim:
+                strategies.append(self._semantic_trim)
+            strategies.append(self._sliding_window)
+        elif current_tokens >= self.semantic_threshold and self._semantic_trim:
+            # Medium compression: try SemanticTrim first (quality-aware)
+            strategies.append(self._semantic_trim)
+            strategies.append(self._sliding_window)
+        else:
+            # Low compression: just SlidingWindow (fast, always works)
+            strategies.append(self._sliding_window)
+        
+        return strategies
 
     async def compress(
         self,
@@ -285,12 +336,25 @@ class BudgetCompressor:
     ) -> Tuple[List[Dict], str, int]:
         """
         Returns (compressed_messages, strategy_used, tokens_removed).
-        Tries strategies in order, stops when target is met.
+        
+        Selects strategies based on token count thresholds, then tries them
+        in order. Returns the first that meets target.
+        If none meet target, returns the fallback with the lowest resulting
+        token count (using tokens removed only as a tie-breaker).
 
         effective_target: override target_tokens for this call (e.g. TTFT-proportional).
         """
         target = effective_target if effective_target is not None else self.target_tokens
-        for strategy in self._strategies:
+        
+        # Select which strategies to try based on current token count
+        strategies = self._select_strategies(current_tokens)
+        
+        best_result = None
+        best_strategy_name = None
+        best_removed = 0
+        best_new_tokens = current_tokens
+        
+        for strategy in strategies:
             if isinstance(strategy, SummariseTailCompressor):
                 compressed, removed = await strategy.async_compress(
                     messages, target, current_tokens, token_counter
@@ -305,8 +369,27 @@ class BudgetCompressor:
             else:
                 new_tokens = current_tokens - removed
 
-            if new_tokens <= target:
+            meets_target = new_tokens <= target
+            
+            # First strategy to meet target wins (satisficing, not optimizing)
+            if meets_target:
                 return compressed, strategy.name, removed
+            
+            # Track the best fallback by actual resulting token count.
+            if (
+                best_result is None
+                or new_tokens < best_new_tokens
+                or (new_tokens == best_new_tokens and removed > best_removed)
+            ):
+                best_result = compressed
+                best_strategy_name = strategy.name
+                best_removed = removed
+                best_new_tokens = new_tokens
 
-        # Fallback: return last attempt even if target not fully met
-        return compressed, strategy.name, removed
+        # Ensure we have a result (should always be true)
+        if best_result is None:
+            best_result = messages
+            best_strategy_name = "none"
+            best_removed = 0
+
+        return best_result, best_strategy_name, best_removed

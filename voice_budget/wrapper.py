@@ -47,6 +47,8 @@ class VoiceBudget:
         on_compression: Optional[Callable] = None,
         on_budget_violation: Optional[Callable] = None,
         verbose: bool = False,
+        semantic_threshold: int = 1500,
+        summarise_threshold: int = 4000,
     ):
         """
         Args:
@@ -60,6 +62,8 @@ class VoiceBudget:
             on_compression:    Callback(CompressionEvent) after each compression.
             on_budget_violation: Callback(BudgetStats) when P95 > target_ms.
             verbose:           Print compression decisions to stdout.
+            semantic_threshold: Use SemanticTrim when current_tokens >= this value (default 1500).
+            summarise_threshold: Use SummariseTail when current_tokens >= this value (default 4000).
         """
         self._llm_fn = llm_fn
         self._verbose = verbose
@@ -76,6 +80,8 @@ class VoiceBudget:
             llm_fn=llm_fn if use_summarise else None,
             use_semantic=use_semantic,
             use_summarise=use_summarise,
+            semantic_threshold=semantic_threshold,
+            summarise_threshold=summarise_threshold,
         )
 
         # Last known good messages (for rollback)

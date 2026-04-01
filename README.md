@@ -30,7 +30,9 @@ pip install "voice-budget[semantic]"
 
 ---
 
-## Quick start
+## Integrations
+
+Use `voice-budget` with any framework:
 
 ### Framework-agnostic
 
@@ -70,6 +72,45 @@ pipeline = Pipeline([
     budget,          # ← insert before LLM
     llm, tts, transport.output(), context_aggregator.assistant(),
 ])
+```
+
+### LiveKit
+
+Use `VoiceBudgetAgent` to wrap your LiveKit agent's LLM calls:
+
+```python
+from voice_budget import VoiceBudgetAgent
+
+budget = VoiceBudgetAgent(
+    target_ms=800,
+    token_budget=2000,
+    model="gpt-4o",
+    use_semantic=True,
+    verbose=True,
+)
+
+async def on_message(message: str, messages: list):
+    # Compress context and measure TTFT
+    response = await budget.process_messages(
+        messages=messages,
+        llm_fn=your_llm_function,
+    )
+
+    # Streaming LLMs return an async iterator; non-streaming calls return text.
+    if hasattr(response, "__aiter__"):
+        chunks = []
+        async for chunk in response:
+            chunks.append(chunk)
+        response_text = "".join(chunks)
+    else:
+        response_text = response
+
+    messages.append({"role": "assistant", "content": response_text})
+    return response_text
+
+# Access stats and reports
+stats = budget.stats()
+report = budget.report()
 ```
 
 ---

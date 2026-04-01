@@ -3,9 +3,12 @@
 All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
-- Prepare for v0.2.2
-  - Minor cleanup: remove unused `run.py` (non-production demo). 
-  - Documentation updates and examples improvements.
+- LiveKit agent integration (`VoiceBudgetAgent` in `livekit_integration.py`)
+  - Full TTFT measurement and context compression for LiveKit voice agents
+  - See README section on LiveKit integration
+- Pipecat integration already available (`VoiceBudgetProcessor` in `pipecat_integration.py`)
+- Minor cleanup: remove unused `run.py` (non-production demo). 
+- Documentation updates and examples improvements.
 
 ## [0.2.1] - 2026-03-19
 ### Fixed
