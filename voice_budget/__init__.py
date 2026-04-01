@@ -7,6 +7,8 @@ from .compressors import (
     SummariseTailCompressor,
     DEFAULT_SUMMARY_PROMPT,
 )
+from .pipecat_integration import VoiceBudgetProcessor
+from .livekit_integration import VoiceBudgetAgent
 
 __version__ = "0.2.4"
 __all__ = [
@@ -21,4 +23,6 @@ __all__ = [
     "SemanticTrimCompressor",
     "SummariseTailCompressor",
     "DEFAULT_SUMMARY_PROMPT",
+    "VoiceBudgetProcessor",
+    "VoiceBudgetAgent",
 ]
